@@ -2,3 +2,6 @@
 *.txt
 *.edgelist
 *.graphml
+
+#folders
+data/
