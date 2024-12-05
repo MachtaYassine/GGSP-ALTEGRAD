@@ -224,5 +224,47 @@ def sigmoid_beta_schedule(timesteps):
 
 
 
-
+## testing script
+if __name__ == "__main__":
+    dataset = 'test'
+    n_max_nodes = 100
+    spectral_emb_dim = 10
+    data_lst = preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim)
+    print(len(data_lst))
+    print(data_lst[0])
+    print(data_lst[0].x.size())
+    print(data_lst[0].edge_index.size())
+    print(data_lst[0].A.size())
+    print(data_lst[0].stats.size())
+    print(data_lst[0].filename)
+    print(data_lst[0].x[0,0])
+    print(data_lst[0].x[0,1])
+    print(data_lst[0].x[0,2])
+    print(data_lst[0].x[0,3])
+    print(data_lst[0].x[0,4])
+    print(data_lst[0].x[0,5])
+    print(data_lst[0].x[0,6])
+    print(data_lst[0].x[0,7])
+    print(data_lst[0].x[0,8])
+    print(data_lst[0].x[0,9])
+    print(data_lst[0].x[0,10])
+    print(data_lst[0].x[0,11])
+    print(data_lst[0].x[0,12])
+    print(data_lst[0].x[0,13])
+    print(data_lst[0].x[0,14])
+    print(data_lst[0].x[0,15])
+    print(data_lst[0].x[0,16])
+    print(data_lst[0].x[0,17])
+    print(data_lst[0].x[0,18])
+    print(data_lst[0].x[0,19])
+    print(data_lst[0].x[0,20])
+    print(data_lst[0].x[0,21])
+    print(data_lst[0].x[0,22])
+    print(data_lst[0].x[0,23])
+    print(data_lst[0].x[0,24])
+    print(data_lst[0].x[0,25])
+    print(data_lst[0].x[0,26])
+    print(data_lst[0].x[0,27])
+    print(data_lst[0].x[0,28])
+    print(data_lst[0].x[0,29])
 
