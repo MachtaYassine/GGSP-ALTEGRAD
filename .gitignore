@@ -3,5 +3,8 @@
 *.edgelist
 *.graphml
 
+#cache
+*.pyc
+
 #folders
 data/
