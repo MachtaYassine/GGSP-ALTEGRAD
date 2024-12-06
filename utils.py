@@ -131,11 +131,6 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,normalize=False):
                 #normalize adjacency matrix
                 if normalize:
                     adj = adj + torch.eye(G.number_of_nodes())
-                    deg = torch.sum(adj, dim=1)
-                    deg_sqrt = deg.pow(-0.5)
-                    deg_sqrt[deg_sqrt == float('inf')] = 0
-                    deg_sqrt = torch.diag(deg_sqrt)
-                    adj = torch.mm(deg_sqrt, adj)
                     # print(adj)
                     # sys.exit()
                     
