@@ -2,6 +2,9 @@
 *.txt
 *.edgelist
 *.graphml
+*.pth
+*.tar 
+*_with_features.csv
 
 #cache
 *.pyc
