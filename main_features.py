@@ -25,7 +25,6 @@ from autoencoder import VariationalAutoEncoder
 from denoise_model import DenoiseNN, p_losses, sample
 from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset
 
-import sys
 
 from torch.utils.data import Subset
 np.random.seed(13)
@@ -94,7 +93,7 @@ parser.add_argument('--n-layers_denoise', type=int, default=3, help="Number of l
 parser.add_argument('--train-autoencoder', action='store_false', default=True, help="Flag to enable/disable autoencoder (VGAE) training (default: enabled)")
 
 # Flag to toggle training of the diffusion-based denoising model
-parser.add_argument('--train-denoiser', action='store_false', default=True, help="Flag to enable/disable denoiser training (default: enabled)")
+parser.add_argument('--train-denoiser', action='store_true', default=True, help="Flag to enable/disable denoiser training (default: enabled)")
 
 # Dimensionality of conditioning vectors for conditional generation
 parser.add_argument('--dim-condition', type=int, default=128, help="Dimensionality of conditioning vectors for conditional generation (default: 128)")
@@ -137,16 +136,16 @@ if args.train_autoencoder:
         train_count = 0
         train_loss_all_recon = 0
         train_loss_all_kld = 0
-        
+        train_loss_feature = 0
         cnt_train=0
 
         for data in train_loader:
             data = data.to(device)
             optimizer.zero_grad()
-            loss, recon, kld  = autoencoder.loss_function_concat_stats(data) #loss_function
+            loss, recon, kld,feature_losses  = autoencoder.loss_function_concat_stats_pn(data) #loss_function
             train_loss_all_recon += recon.item()
             train_loss_all_kld += kld.item()
-            
+            train_loss_feature += feature_losses.item()
             cnt_train+=1
             loss.backward()
             train_loss_all += loss.item()
@@ -159,21 +158,21 @@ if args.train_autoencoder:
         cnt_val = 0
         val_loss_all_recon = 0
         val_loss_all_kld = 0
-        
+        val_loss_feature = 0
 
         for data in val_loader:
             data = data.to(device)
-            loss, recon, kld  = autoencoder.loss_function_concat_stats(data) #loss_function
+            loss, recon, kld,feature_losses  = autoencoder.loss_function_concat_stats_pn(data) #loss_function
             val_loss_all_recon += recon.item()
             val_loss_all_kld += kld.item()
             val_loss_all += loss.item()
-            
+            val_loss_feature += feature_losses.item()
             cnt_val+=1
             val_count += torch.max(data.batch)+1
 
         if epoch % 1 == 0:
             dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-            print('{} Epoch: {:04d}, Train Loss: {:.5f}, Train Reconstruction Loss: {:.2f}, Train KLD Loss: {:.2f},  Val Loss: {:.5f}, Val Reconstruction Loss: {:.2f}, Val KLD Loss: {:.2f}'.format(dt_t, epoch, train_loss_all/train_count, train_loss_all_recon/cnt_train, train_loss_all_kld/cnt_train ,val_loss_all/val_count, val_loss_all_recon/cnt_val, val_loss_all_kld/cnt_val, ))
+            print('{} Epoch: {:04d}, Train Loss: {:.5f}, Train Reconstruction Loss: {:.2f}, Train KLD Loss: {:.2f}, Train Feature Loss: {:.2f}, Val Loss: {:.5f}, Val Reconstruction Loss: {:.2f}, Val KLD Loss: {:.2f} Val Feature Loss: {:.2f}'.format(dt_t, epoch, train_loss_all/train_count, train_loss_all_recon/cnt_train, train_loss_all_kld/cnt_train,train_loss_feature/cnt_train ,val_loss_all/val_count, val_loss_all_recon/cnt_val, val_loss_all_kld/cnt_val, val_loss_feature/cnt_val))
             
         scheduler.step()
 
@@ -184,10 +183,10 @@ if args.train_autoencoder:
                 'optimizer' : optimizer.state_dict(),
             }, 'autoencoder.pth.tar')
             
-        if early_stop_counter >= 20:
+        if early_stop_counter > 20:
             break
         
-        if epoch > 20 and best_val_loss < val_loss_all:
+        if best_val_loss < val_loss_all:
             early_stop_counter += 1
 else:
     checkpoint = torch.load('autoencoder.pth.tar')
@@ -228,7 +227,7 @@ if args.train_denoiser:
         for data in train_loader:
             data = data.to(device)
             optimizer.zero_grad()
-            x_g = autoencoder.encode(data)
+            x_g = autoencoder.encode_concat(data)
             t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
             loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, loss_type="huber")
             loss.backward()
@@ -282,9 +281,7 @@ with open("output.csv", "w", newline="") as csvfile:
 
         samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=bs)
         x_sample = samples[-1]
-        # print(x_sample.shape)
-        # sys.exit()
-        adj = autoencoder.decode_mu(torch.cat([x_sample, stat], dim=1))
+        adj = autoencoder.decode_concat(x_sample)
         stat_d = torch.reshape(stat, (-1, args.n_condition))
 
 
