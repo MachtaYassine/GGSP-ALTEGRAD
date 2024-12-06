@@ -19,13 +19,13 @@ from torch_geometric.data import Data
 
 from extract_feats import extract_feats, extract_numbers
 
+import sys
 
-
-def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim):
+def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,normalize=False):
 
     data_lst = []
     if dataset == 'test':
-        filename = './data/dataset_'+dataset+'.pt'
+        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim{spectral_emb_dim}.pt'
         desc_file = './data/'+dataset+'/test.txt'
 
         if os.path.isfile(filename):
@@ -40,16 +40,17 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim):
                 graph_id = tokens[0]
                 desc = tokens[1:]
                 desc = "".join(desc)
+                
                 feats_stats = extract_numbers(desc)
                 feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
-                data_lst.append(Data(stats=feats_stats, filename = graph_id))
+                data_lst.append(Data(stats=feats_stats, filename = graph_id)) #prompt=desc for testing
             fr.close()                    
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
 
 
     else:
-        filename = './data/dataset_'+dataset+'.pt'
+        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim_{spectral_emb_dim}_norm_{normalize}.pt'
         graph_path = './data/'+dataset+'/graph'
         desc_path = './data/'+dataset+'/description'
 
@@ -107,7 +108,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim):
                 diags = np.squeeze(np.asarray(diags))
                 D = sparse.diags(diags).toarray()
                 L = D - adj_bfs
-                with sp.errstate(divide="ignore"):
+                with sp.special.errstate(singular="ignore"):
                     diags_sqrt = 1.0 / np.sqrt(diags)
                 diags_sqrt[np.isinf(diags_sqrt)] = 0
                 DH = sparse.diags(diags).toarray()
@@ -127,6 +128,17 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim):
                 mn = min(G.number_of_nodes(),spectral_emb_dim)
                 mn+=1
                 x[:,1:mn] = eigvecs[:,:spectral_emb_dim]
+                #normalize adjacency matrix
+                if normalize:
+                    adj = adj + torch.eye(G.number_of_nodes())
+                    deg = torch.sum(adj, dim=1)
+                    deg_sqrt = deg.pow(-0.5)
+                    deg_sqrt[deg_sqrt == float('inf')] = 0
+                    deg_sqrt = torch.diag(deg_sqrt)
+                    adj = torch.mm(deg_sqrt, adj)
+                    # print(adj)
+                    # sys.exit()
+                    
                 adj = F.pad(adj, [0, size_diff, 0, size_diff])
                 adj = adj.unsqueeze(0)
 
@@ -226,45 +238,32 @@ def sigmoid_beta_schedule(timesteps):
 
 ## testing script
 if __name__ == "__main__":
+    print(f"Visualizing the Test dataset")
     dataset = 'test'
-    n_max_nodes = 100
+    n_max_nodes = 50
     spectral_emb_dim = 10
     data_lst = preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim)
     print(len(data_lst))
     print(data_lst[0])
-    print(data_lst[0].x.size())
-    print(data_lst[0].edge_index.size())
-    print(data_lst[0].A.size())
-    print(data_lst[0].stats.size())
-    print(data_lst[0].filename)
-    print(data_lst[0].x[0,0])
-    print(data_lst[0].x[0,1])
-    print(data_lst[0].x[0,2])
-    print(data_lst[0].x[0,3])
-    print(data_lst[0].x[0,4])
-    print(data_lst[0].x[0,5])
-    print(data_lst[0].x[0,6])
-    print(data_lst[0].x[0,7])
-    print(data_lst[0].x[0,8])
-    print(data_lst[0].x[0,9])
-    print(data_lst[0].x[0,10])
-    print(data_lst[0].x[0,11])
-    print(data_lst[0].x[0,12])
-    print(data_lst[0].x[0,13])
-    print(data_lst[0].x[0,14])
-    print(data_lst[0].x[0,15])
-    print(data_lst[0].x[0,16])
-    print(data_lst[0].x[0,17])
-    print(data_lst[0].x[0,18])
-    print(data_lst[0].x[0,19])
-    print(data_lst[0].x[0,20])
-    print(data_lst[0].x[0,21])
-    print(data_lst[0].x[0,22])
-    print(data_lst[0].x[0,23])
-    print(data_lst[0].x[0,24])
-    print(data_lst[0].x[0,25])
-    print(data_lst[0].x[0,26])
-    print(data_lst[0].x[0,27])
-    print(data_lst[0].x[0,28])
-    print(data_lst[0].x[0,29])
-
+    print(data_lst[0].stats)# tensor of size 1x7
+    # print(data_lst[0].prompt)
+    print(data_lst[0].filename) #file name or index of the graph
+    print("-------------------")
+    print(f"Visualizing the Train dataset")
+    dataset = 'train'
+    n_max_nodes = 50
+    spectral_emb_dim = 10
+    data_lst = preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,normalize=True)
+    print(len(data_lst))
+    print(data_lst[0])
+    print('\n')
+    print(data_lst[0].x) # tensor of shape num_nodes, spectral_emb_dim+1
+    print('\n')
+    print(data_lst[0].edge_index) # tensor of shape 2 x num_edges
+    print('\n')
+    print(data_lst[0].A) # tensor of shape 1 , max nodes, max nodes
+    print('\n')
+    print(data_lst[0].stats)# tensor of size 1x7
+    print('\n')
+    print(data_lst[0].filename) #file name or index of the graph
+    
