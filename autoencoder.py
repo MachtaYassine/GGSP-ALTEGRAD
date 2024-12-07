@@ -33,18 +33,9 @@ class Decoder(nn.Module):
         adj = adj + torch.transpose(adj, 1, 2)
         return adj
 
-class Decoder_normalized(nn.Module): #added by Yass mainly to accept (and output) normalized adjacency matrices
+class Decoder_normalized(Decoder): #added by Yass mainly to accept (and output) normalized adjacency matrices
     def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes):
-        super(Decoder_normalized, self).__init__()
-        self.n_layers = n_layers
-        self.n_nodes = n_nodes
-
-        mlp_layers = [nn.Linear(latent_dim, hidden_dim)] + [nn.Linear(hidden_dim, hidden_dim) for i in range(n_layers-2)]
-        mlp_layers.append(nn.Linear(hidden_dim, 2*n_nodes*(n_nodes+1)//2))
-
-        self.mlp = nn.ModuleList(mlp_layers)
-        self.relu = nn.ReLU()
-        self.sigmoid = nn.Sigmoid()
+        super().__init__(latent_dim, hidden_dim, n_layers, n_nodes)
 
     def forward(self, x):
         for i in range(self.n_layers-1):
@@ -101,28 +92,11 @@ class GIN(torch.nn.Module):
         out = self.bn(out)
         out = self.fc(out)
         return out
+    
 
-
-class GIN_concat(torch.nn.Module):
+class GIN_concat(GIN):
     def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
-        super().__init__()
-        self.dropout = dropout
-        
-        self.convs = torch.nn.ModuleList()
-        self.convs.append(GINConv(nn.Sequential(nn.Linear(input_dim, hidden_dim),  
-                            nn.LeakyReLU(0.2),
-                            nn.BatchNorm1d(hidden_dim),
-                            nn.Linear(hidden_dim, hidden_dim), 
-                            nn.LeakyReLU(0.2))
-                            ))                        
-        for layer in range(n_layers-1):
-            self.convs.append(GINConv(nn.Sequential(nn.Linear(hidden_dim, hidden_dim),  
-                            nn.LeakyReLU(0.2),
-                            nn.BatchNorm1d(hidden_dim),
-                            nn.Linear(hidden_dim, hidden_dim), 
-                            nn.LeakyReLU(0.2))
-                            )) 
-
+        super().__init__(input_dim, hidden_dim, latent_dim, n_layers, dropout)
         self.bn = nn.BatchNorm1d(hidden_dim+7)
         self.fc = nn.Linear(hidden_dim+7, latent_dim)
         
@@ -241,6 +215,15 @@ class VariationalAutoEncoder(nn.Module):
         # print(data.batch.shape) #N_nodes_in_all_batch this keeps track of "to which graph does the node belong to"
         # sys.exit()
         return loss, recon, kld
+
+    
+
+class VariationalAutoEncoder_concat(VariationalAutoEncoder):
+    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes):
+        super().__init__(input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes)
+        self.encoder = GIN_concat(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
+        self.decoder = Decoder(latent_dim+7, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        # self.decoder = Decoder_normalized(latent_dim+7, hidden_dim_dec, n_layers_dec, n_max_nodes)
 
 
     def loss_function_concat_stats(self, data, beta=0.05): #this loss variant concatenates the stats to the latent space before decoding
