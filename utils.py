@@ -15,13 +15,14 @@ from grakel.utils import graph_from_networkx
 from grakel.kernels import WeisfeilerLehman, VertexHistogram
 from tqdm import tqdm
 import scipy.sparse as sparse
+from sklearn.cluster import KMeans
 from torch_geometric.data import Data
 
 from extract_feats import extract_feats, extract_numbers
 
 import sys
 
-def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,normalize=False):
+def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, labelize=False):
 
     data_lst = []
     if dataset == 'test':
@@ -50,7 +51,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,normalize=False):
 
 
     else:
-        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim_{spectral_emb_dim}_norm_{normalize}.pt'
+        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim_{spectral_emb_dim}_norm_{normalize}_with_labels_{labelize}.pt'
         graph_path = './data/'+dataset+'/graph'
         desc_path = './data/'+dataset+'/description'
 
@@ -141,6 +142,8 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,normalize=False):
                 feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
 
                 data_lst.append(Data(x=x, edge_index=edge_index, A=adj, stats=feats_stats, filename = filen))
+            if labelize:
+                data_lst = assign_labels(data_lst)
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
     return data_lst
@@ -228,6 +231,31 @@ def sigmoid_beta_schedule(timesteps):
     beta_end = 0.02
     betas = torch.linspace(-6, 6, timesteps)
     return torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
+
+def assign_labels(data, n_clusters=3):
+    """
+    Assigns cluster labels to each graph in the data list.
+    
+    Args:
+    - data: List of Data objects containing graph information.
+    - n_clusters: Number of clusters for K-means. Set to 3 after WCSS visualization.
+    
+    Returns:
+    - data: Updated list with cluster labels assigned.
+    """
+    properties = torch.cat([graph.stats for graph in data], axis=0)
+
+    properties_np = properties.numpy()
+
+    # Perform K-means clustering
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    labels = kmeans.fit_predict(properties_np)
+
+    # Assign labels back to each graph
+    for graph, label in zip(data, labels):
+        graph.label = torch.tensor([label])  # Add the label as a tensor
+
+    return data
 
 
 
