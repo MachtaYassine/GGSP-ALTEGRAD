@@ -21,7 +21,7 @@ from torch_geometric.data import Data
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 
-from autoencoder import VariationalAutoEncoder
+from autoencoder import VariationalAutoEncoder_concat
 from denoise_model import DenoiseNN, p_losses, sample
 from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset
 
@@ -103,14 +103,29 @@ parser.add_argument('--dim-condition', type=int, default=128, help="Dimensionali
 parser.add_argument('--n-condition', type=int, default=7, help="Number of distinct condition properties used in conditional vector (default: 7)")
 
 parser.add_argument('--normalize', action='store_true', default=False, help="Flag to enable/disable normalization of adjacency matrix (default: disabled)")
+
+# Labelize for contrastive learning
+parser.add_argument('--labelize', action='store_true', default=False, help="Flag to enable/disable labelization of graphs into clusters (default: disabled)")
+
+# Beta for KLD loss weight
+parser.add_argument('--beta', type=float, default=0.05, help="Weight for the KLD loss term in the total loss calculation (default: 0.05)")
+
+# Contrastive hyperparameters
+parser.add_argument('--contrastive-hyperparameters', type=float, nargs=2, default=None, 
+                    help="Two hyperparameters for contrastive loss: contrastive and entropy weights (default: None)")
+
+# Penalization hyperparameter
+parser.add_argument('--penalization-hyperparameters', type=float, default=None, 
+                    help="Hyperparameter weight for the adjacency penalization term (default: None)")
+
 args = parser.parse_args()
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 # preprocess train data, validation data and test data. Only once for the first time that you run the code. Then the appropriate .pt files will be saved and loaded.
-trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim,args.normalize)
-validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim,args.normalize)
-testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim,args.normalize)
+trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
+validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
+testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize)
 
 
 
@@ -121,7 +136,7 @@ test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 
 
 # initialize VGAE model
-autoencoder = VariationalAutoEncoder(args.spectral_emb_dim+1, args.hidden_dim_encoder, args.hidden_dim_decoder, args.latent_dim, args.n_layers_encoder, args.n_layers_decoder, args.n_max_nodes).to(device)
+autoencoder = VariationalAutoEncoder_concat(args.spectral_emb_dim+1, args.hidden_dim_encoder, args.hidden_dim_decoder, args.latent_dim, args.n_layers_encoder, args.n_layers_decoder, args.n_max_nodes).to(device)
 
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
@@ -133,52 +148,75 @@ if args.train_autoencoder:
     early_stop_counter = 0
     for epoch in range(1, args.epochs_autoencoder+1):
         autoencoder.train()
-        train_loss_all = 0
-        train_count = 0
-        train_loss_all_recon = 0
-        train_loss_all_kld = 0
-        
-        cnt_train=0
-
+        train_loss_trackers = {}
+        val_loss_trackers = {}
         for data in train_loader:
             data = data.to(device)
             optimizer.zero_grad()
-            loss, recon, kld  = autoencoder.loss_function_concat_stats(data) #loss_function
-            train_loss_all_recon += recon.item()
-            train_loss_all_kld += kld.item()
+
+            # Call loss function
+            loss_dict = autoencoder.loss_function_concat_stats(
+                data,
+                args.beta,
+                args.contrastive_hyperparameters,
+                args.penalization_hyperparameters,
+                )
             
-            cnt_train+=1
-            loss.backward()
-            train_loss_all += loss.item()
-            train_count += torch.max(data.batch)+1
+            # Aggregate loss values dynamically
+            for key, value in loss_dict.items():
+                if key not in train_loss_trackers:
+                    train_loss_trackers[key] = 0.0
+                train_loss_trackers[key] += value.item()
+
+            # Backpropagation
+            loss_dict["loss"].backward()
             optimizer.step()
 
+        # Calculate averages for the epoch
+        train_count = len(train_loader.dataset)
+        for key in train_loss_trackers:
+            train_loss_trackers[key] /= train_count
+
+        # Validation
         autoencoder.eval()
-        val_loss_all = 0
-        val_count = 0
-        cnt_val = 0
-        val_loss_all_recon = 0
-        val_loss_all_kld = 0
-        
+        with torch.no_grad():
+            for data in val_loader:
+                data = data.to(device)
 
-        for data in val_loader:
-            data = data.to(device)
-            loss, recon, kld  = autoencoder.loss_function_concat_stats(data) #loss_function
-            val_loss_all_recon += recon.item()
-            val_loss_all_kld += kld.item()
-            val_loss_all += loss.item()
-            
-            cnt_val+=1
-            val_count += torch.max(data.batch)+1
+                # Call loss function
+                loss_dict = autoencoder.loss_function_concat_stats(
+                    data,
+                    args.beta,
+                    args.contrastive_hyperparameters,
+                    args.penalization_hyperparameters,
+                    )
 
-        if epoch % 1 == 0:
-            dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-            print('{} Epoch: {:04d}, Train Loss: {:.5f}, Train Reconstruction Loss: {:.2f}, Train KLD Loss: {:.2f},  Val Loss: {:.5f}, Val Reconstruction Loss: {:.2f}, Val KLD Loss: {:.2f}'.format(dt_t, epoch, train_loss_all/train_count, train_loss_all_recon/cnt_train, train_loss_all_kld/cnt_train ,val_loss_all/val_count, val_loss_all_recon/cnt_val, val_loss_all_kld/cnt_val, ))
-            
+                # Aggregate validation loss values
+                for key, value in loss_dict.items():
+                    if key not in val_loss_trackers:
+                        val_loss_trackers[key] = 0.0
+                    val_loss_trackers[key] += value.item()
+
+        # Calculate averages for validation
+        val_count = len(val_loader.dataset)
+        for key in val_loss_trackers:
+            val_loss_trackers[key] /= val_count
+
+        # Print losses dynamically
+        dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        loss_str = ", ".join(
+            [f"{key.capitalize()} Loss: {value:.5f}" for key, value in train_loss_trackers.items()]
+        )
+        print(f"{dt_t} Epoch: {epoch:04d}, Train {loss_str}")
+        loss_str = ", ".join(
+            [f"{key.capitalize()} Loss: {value:.5f}" for key, value in val_loss_trackers.items()]
+        )
+        print(f"{dt_t} Epoch: {epoch:04d}, Val {loss_str}")
+
         scheduler.step()
 
-        if best_val_loss >= val_loss_all:
-            best_val_loss = val_loss_all
+        if best_val_loss >= val_loss_trackers["loss"]:
+            best_val_loss = val_loss_trackers["loss"]
             torch.save({
                 'state_dict': autoencoder.state_dict(),
                 'optimizer' : optimizer.state_dict(),
@@ -187,7 +225,7 @@ if args.train_autoencoder:
         if early_stop_counter >= 20:
             break
         
-        if epoch > 20 and best_val_loss < val_loss_all:
+        if epoch > 20 and best_val_loss < val_loss_trackers["loss"]:
             early_stop_counter += 1
 else:
     checkpoint = torch.load('autoencoder.pth.tar')
