@@ -255,7 +255,7 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         return adj
 
 
-    def loss_function_concat_stats(
+    def loss(
         self, 
         data, 
         beta=0.05, 
@@ -388,3 +388,71 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         feature_losses = (MSE_n_nodes + MSE_n_edges + coherence_loss)
 
         return lambda_penalization * feature_losses
+    
+
+
+
+class GMVAE(VariationalAutoEncoder):
+    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, num_categories=10):
+        super().__init__(input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes)
+        self.num_categories = num_categories
+        self.qy_fc = nn.Linear(hidden_dim_enc, num_categories)  # Propose distribution over y
+        self.decoder = Decoder(latent_dim+num_categories, hidden_dim_dec, n_layers_dec, n_max_nodes)
+
+    def forward(self, data):
+        # Encoding
+        x_g = self.encoder(data)
+        qy_logits = self.qy_fc(x_g)  # Categorical logits for q(y)
+        qy_probs = F.softmax(qy_logits, dim=-1)
+
+        z_samples, reconstructions = [], []
+        for i in range(self.num_categories):
+            # Extract labels from the dataset
+            labels = torch.tensor([data[i].label for i in range(len(data))], device=x_g.device)  # Shape: (batch_size,)
+
+            # Create one-hot encodings
+            y_onehot = torch.zeros(labels.size(0), self.num_categories, device=labels.device)  # Shape: (batch_size, num_categories)
+            y_onehot.scatter_(1, labels.unsqueeze(1).long(), 1)  # Fill one-hot based on the labels
+            
+            # Infer z for this category
+            z_mean = self.fc_mu(x_g)
+            z_logvar = self.fc_logvar(x_g)
+            z = self.reparameterize(z_mean, z_logvar)
+            
+            # Decode for this category
+            z_y = torch.cat([z, y_onehot], dim=1)
+            adj = self.decoder(z_y)
+            
+            z_samples.append((z_mean, z_logvar))
+            reconstructions.append(adj)
+
+        return qy_probs, z_samples, reconstructions
+    
+    def loss(self, data, beta=0.05):
+        # Encoding
+        qy_probs, z_samples, reconstructions = self.forward(data)
+
+        nent_loss = -torch.sum(qy_probs * torch.log(qy_probs + 1e-8), dim=-1).mean()  # Negative entropy loss
+
+        # Loss for each category
+        recon_losses, kld_losses = [], []
+        for i, (z_sample, recon) in enumerate(zip(z_samples, reconstructions)):
+            z_mean, z_logvar = z_sample
+            kld = -0.5 * torch.sum(1 + z_logvar - z_mean.pow(2) - z_logvar.exp(), dim=-1).mean()
+            recon_loss = F.l1_loss(recon, data.A, reduction='mean')  # or other reconstruction loss
+            recon_losses.append(recon_loss)
+            kld_losses.append(kld)
+
+        # Combine losses weighted by q(y)
+        recon_loss = sum(qy_probs[:, i] * recon_losses[i] for i in range(len(reconstructions))).mean()
+        kld_loss = sum(qy_probs[:, i] * kld_losses[i] for i in range(len(z_samples))).mean()
+
+        results = {
+            "loss": recon_loss + beta * kld_loss + nent_loss,
+            "recon": recon_loss,
+            "kld": kld_loss,
+            "negative_entropy": nent_loss,
+        }
+
+        return results
+    

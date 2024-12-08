@@ -21,7 +21,7 @@ from torch_geometric.data import Data
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 
-from autoencoder import VariationalAutoEncoder_concat
+from autoencoder import VariationalAutoEncoder_concat, GMVAE
 from denoise_model import DenoiseNN, p_losses, sample
 from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset
 
@@ -102,6 +102,9 @@ parser.add_argument('--dim-condition', type=int, default=128, help="Dimensionali
 # Number of conditions used in conditional vector (number of properties)
 parser.add_argument('--n-condition', type=int, default=7, help="Number of distinct condition properties used in conditional vector (default: 7)")
 
+# Whether to train VAE_concat od GMVAE
+parser.add_argument('--feature-concat', action='store_true', default=False, help="Use GMVAE model by default, other is concat (default: disabled)")
+
 parser.add_argument('--normalize', action='store_true', default=False, help="Flag to enable/disable normalization of adjacency matrix (default: disabled)")
 
 # Labelize for contrastive learning
@@ -117,6 +120,9 @@ parser.add_argument('--contrastive-hyperparameters', type=float, nargs=2, defaul
 # Penalization hyperparameter
 parser.add_argument('--penalization-hyperparameters', type=float, default=None, 
                     help="Hyperparameter weight for the adjacency penalization term (default: None)")
+
+# Number of categories for the GMVAE model
+parser.add_argument('--n-cat', type=int, default=3, help="Number of gaussians in the mixture model (default: 3)")
 
 args = parser.parse_args()
 
@@ -136,17 +142,31 @@ test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 
 
 # initialize VGAE model
-autoencoder = VariationalAutoEncoder_concat(
-    args.spectral_emb_dim+1, 
-    args.hidden_dim_encoder, 
-    args.hidden_dim_decoder, 
-    args.latent_dim, 
-    args.n_layers_encoder, 
-    args.n_layers_decoder, 
-    args.n_max_nodes,
-    args.labelize,
-    args.normalize,
-).to(device)
+if args.feature_concat:
+    autoencoder = VariationalAutoEncoder_concat(
+        args.spectral_emb_dim+1, 
+        args.hidden_dim_encoder, 
+        args.hidden_dim_decoder, 
+        args.latent_dim, 
+        args.n_layers_encoder, 
+        args.n_layers_decoder, 
+        args.n_max_nodes,
+        args.labelize,
+        args.normalize,
+    ).to(device)
+else:
+    if not args.labelize:  # Check if --labelize argument is specified
+        raise ValueError("If using GMVAE, you need to labelize your data by specifying --labelize.")
+    autoencoder = GMVAE(
+        args.spectral_emb_dim+1, 
+        args.hidden_dim_encoder, 
+        args.hidden_dim_decoder, 
+        args.latent_dim, 
+        args.n_layers_encoder, 
+        args.n_layers_decoder, 
+        args.n_max_nodes,
+        args.n_cat,
+    ).to(device)
 
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
@@ -165,12 +185,18 @@ if args.train_autoencoder:
             optimizer.zero_grad()
 
             # Call loss function
-            loss_dict = autoencoder.loss_function_concat_stats(
-                data,
-                args.beta,
-                args.contrastive_hyperparameters,
-                args.penalization_hyperparameters,
-                )
+            if args.feature_concat:
+                loss_dict = autoencoder.loss(
+                    data,
+                    args.beta,
+                    args.contrastive_hyperparameters,
+                    args.penalization_hyperparameters,
+                    )
+            else:
+                loss_dict = autoencoder.loss(
+                    data,
+                    args.beta,
+                    )
             
             # Aggregate loss values dynamically
             for key, value in loss_dict.items():
@@ -194,12 +220,18 @@ if args.train_autoencoder:
                 data = data.to(device)
 
                 # Call loss function
-                loss_dict = autoencoder.loss_function_concat_stats(
-                    data,
-                    args.beta,
-                    args.contrastive_hyperparameters,
-                    args.penalization_hyperparameters,
-                    )
+                if args.feature_concat:
+                    loss_dict = autoencoder.loss(
+                        data,
+                        args.beta,
+                        args.contrastive_hyperparameters,
+                        args.penalization_hyperparameters,
+                        )
+                else:
+                    loss_dict = autoencoder.loss(
+                        data,
+                        args.beta,
+                        )
 
                 # Aggregate validation loss values
                 for key, value in loss_dict.items():
@@ -333,13 +365,24 @@ with open("output.csv", "w", newline="") as csvfile:
         # print(x_sample.shape)
         # sys.exit()
 
-        if args.labelize:
-            labels = torch.tensor([data[i].label for i in range(len(data))], device=x_sample.device)  # Shape: (batch_size,)
-            x_g = torch.cat((x_sample, stat, labels.unsqueeze(1)), dim=1) 
+        if args.feature_concat:
+            if args.labelize:
+                labels = torch.tensor([data[i].label for i in range(len(data))], device=x_sample.device)  # Shape: (batch_size,)
+                x_sample = torch.cat((x_sample, stat, labels.unsqueeze(1)), dim=1) 
+            else:
+                x_sample = torch.cat((x_sample, stat), dim=1) 
         else:
-            x_g = torch.cat((x_sample, stat), dim=1) 
+            # Assume labels from the test dataset
+            labels = torch.tensor([data[i].label for i in range(len(data))], device=x_sample.device)  # Shape: (batch_size,)
 
-        adj = autoencoder.decode_mu(x_g)
+            # Create one-hot encodings for the labels
+            y_onehot = torch.zeros(labels.size(0), args.n_cat, device=labels.device)
+            y_onehot.scatter_(1, labels.unsqueeze(1).long(), 1)
+
+            # Concatenate z and y_onehot
+            x_sample = torch.cat([x_sample, y_onehot], dim=1)
+
+        adj = autoencoder.decode_mu(x_sample)
         stat_d = torch.reshape(stat, (-1, args.n_condition))
 
 
