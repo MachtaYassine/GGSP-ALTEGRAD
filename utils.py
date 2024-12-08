@@ -26,7 +26,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
 
     data_lst = []
     if dataset == 'test':
-        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim{spectral_emb_dim}.pt'
+        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim{spectral_emb_dim}_with_labels_{labelize}.pt'
         desc_file = './data/'+dataset+'/test.txt'
 
         if os.path.isfile(filename):
@@ -45,6 +45,8 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
                 feats_stats = extract_numbers(desc)
                 feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
                 data_lst.append(Data(stats=feats_stats, filename = graph_id)) #prompt=desc for testing
+            if labelize:
+                data_lst = assign_labels(data_lst)
             fr.close()                    
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')

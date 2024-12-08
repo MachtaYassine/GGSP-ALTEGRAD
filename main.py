@@ -125,7 +125,7 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 # preprocess train data, validation data and test data. Only once for the first time that you run the code. Then the appropriate .pt files will be saved and loaded.
 trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
 validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
-testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize)
+testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
 
 
 
@@ -136,7 +136,17 @@ test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 
 
 # initialize VGAE model
-autoencoder = VariationalAutoEncoder_concat(args.spectral_emb_dim+1, args.hidden_dim_encoder, args.hidden_dim_decoder, args.latent_dim, args.n_layers_encoder, args.n_layers_decoder, args.n_max_nodes).to(device)
+autoencoder = VariationalAutoEncoder_concat(
+    args.spectral_emb_dim+1, 
+    args.hidden_dim_encoder, 
+    args.hidden_dim_decoder, 
+    args.latent_dim, 
+    args.n_layers_encoder, 
+    args.n_layers_decoder, 
+    args.n_max_nodes,
+    args.labelize,
+    args.normalize,
+).to(device)
 
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
@@ -322,7 +332,14 @@ with open("output.csv", "w", newline="") as csvfile:
         x_sample = samples[-1]
         # print(x_sample.shape)
         # sys.exit()
-        adj = autoencoder.decode_mu(torch.cat([x_sample, stat], dim=1))
+
+        if args.labelize:
+            labels = torch.tensor([data[i].label for i in range(len(data))], device=x_sample.device)  # Shape: (batch_size,)
+            x_g = torch.cat((x_sample, stat, labels.unsqueeze(1)), dim=1) 
+        else:
+            x_g = torch.cat((x_sample, stat), dim=1) 
+
+        adj = autoencoder.decode_mu(x_g)
         stat_d = torch.reshape(stat, (-1, args.n_condition))
 
 
