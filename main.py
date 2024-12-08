@@ -380,7 +380,7 @@ with open("output.csv", "w", newline="") as csvfile:
             y_onehot.scatter_(1, labels.unsqueeze(1).long(), 1)
 
             # Concatenate z and y_onehot
-            x_sample = torch.cat([x_sample, y_onehot], dim=1)
+            x_sample = torch.cat([x_sample, stat, y_onehot], dim=1)
 
         adj = autoencoder.decode_mu(x_sample)
         stat_d = torch.reshape(stat, (-1, args.n_condition))

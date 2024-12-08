@@ -397,13 +397,14 @@ class GMVAE(VariationalAutoEncoder):
         super().__init__(input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes)
         self.num_categories = num_categories
         self.qy_fc = nn.Linear(hidden_dim_enc, num_categories)  # Propose distribution over y
-        self.decoder = Decoder(latent_dim+num_categories, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        self.decoder = Decoder(latent_dim+7+num_categories, hidden_dim_dec, n_layers_dec, n_max_nodes)
 
     def forward(self, data):
         # Encoding
         x_g = self.encoder(data)
         qy_logits = self.qy_fc(x_g)  # Categorical logits for q(y)
         qy_probs = F.softmax(qy_logits, dim=-1)
+        stats = data.stats
 
         z_samples, reconstructions = [], []
         for i in range(self.num_categories):
@@ -420,7 +421,7 @@ class GMVAE(VariationalAutoEncoder):
             z = self.reparameterize(z_mean, z_logvar)
             
             # Decode for this category
-            z_y = torch.cat([z, y_onehot], dim=1)
+            z_y = torch.cat([z, stats, y_onehot], dim=1)
             adj = self.decoder(z_y)
             
             z_samples.append((z_mean, z_logvar))
