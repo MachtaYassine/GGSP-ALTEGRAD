@@ -196,6 +196,7 @@ if args.train_autoencoder:
                 loss_dict = autoencoder.loss(
                     data,
                     args.beta,
+                    args.contrastive_hyperparameters,
                     )
             
             # Aggregate loss values dynamically
@@ -231,6 +232,7 @@ if args.train_autoencoder:
                     loss_dict = autoencoder.loss(
                         data,
                         args.beta,
+                        args.contrastive_hyperparameters,
                         )
 
                 # Aggregate validation loss values
