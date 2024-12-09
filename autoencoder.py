@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from torch_geometric.nn import GINConv #Need to look at this one
 from torch_geometric.nn import global_add_pool
+from torch_geometric.utils import scatter
 import sys
 # Decoder
 class Decoder(nn.Module):
@@ -52,7 +53,19 @@ class Decoder_normalized(Decoder): #added by Yass mainly to accept (and output) 
         adj = adj + torch.tril(torch.transpose(adj, 1, 2),diagonal=-1)
         return adj
     
-    
+class DeepSets(nn.Module):
+    def __init__(self, hidden_dim): # Keep the embedding dimension
+        super(DeepSets, self).__init__()
+        self.fc1 = nn.Linear(hidden_dim, 2*hidden_dim)
+        self.fc2 = nn.Linear(2*hidden_dim, hidden_dim)
+        self.tanh = nn.Tanh()
+
+    def forward(self, x, batch):    
+        phi_x = self.tanh(self.fc1(x))
+        sum_x = scatter(phi_x, batch, dim=0, reduce='sum')
+        y = self.fc2(sum_x)
+        
+        return y.squeeze()  
 
 
 class GIN(torch.nn.Module):
@@ -79,7 +92,7 @@ class GIN(torch.nn.Module):
         self.fc = nn.Linear(hidden_dim, latent_dim)
         
 
-    def forward(self, data):
+    def forward(self, data, deepsets=None):
         edge_index = data.edge_index
         x = data.x
 
@@ -87,7 +100,11 @@ class GIN(torch.nn.Module):
             x = conv(x, edge_index)
             x = F.dropout(x, self.dropout, training=self.training)
 
-        out = global_add_pool(x, data.batch)# aggreagates all the nodes features in the batch
+        # aggreagates all the nodes features in the batch
+        if deepsets is not None:
+            out = deepsets(x, data.batch)
+        else:
+            out = global_add_pool(x, data.batch)
         
         out = self.bn(out)
         out = self.fc(out)
@@ -101,7 +118,7 @@ class GIN_concat(GIN):
         self.fc = nn.Linear(hidden_dim+7, latent_dim)
         
 
-    def forward(self, data):
+    def forward(self, data, deepsets=None):
         edge_index = data.edge_index
         x = data.x
 
@@ -109,7 +126,11 @@ class GIN_concat(GIN):
             x = conv(x, edge_index)
             x = F.dropout(x, self.dropout, training=self.training)
 
-        out = global_add_pool(x, data.batch)# aggreagates all the nodes features in the batch
+        # aggreagates all the nodes features in the batch
+        if deepsets is not None:
+            out = deepsets(x, data.batch)
+        else:
+            out = global_add_pool(x, data.batch)
         out= torch.cat((out, data.stats), dim=1)
         out = self.bn(out)
         out = self.fc(out)
@@ -119,7 +140,7 @@ class GIN_concat(GIN):
 
 # Variational Autoencoder
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes):
+    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, deepsets: DeepSets = None):
         super(VariationalAutoEncoder, self).__init__()
         self.n_max_nodes = n_max_nodes
         self.input_dim = input_dim
@@ -130,9 +151,10 @@ class VariationalAutoEncoder(nn.Module):
         # self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
         self.decoder = Decoder(latent_dim+7, hidden_dim_dec, n_layers_dec, n_max_nodes)
         # self.decoder = Decoder_normalized(latent_dim+7, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        self.deepsets = deepsets
 
     def forward(self, data):
-        x_g = self.encoder(data)
+        x_g = self.encoder(data, self.deepsets)
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar)
@@ -140,7 +162,7 @@ class VariationalAutoEncoder(nn.Module):
         return adj
 
     def encode(self, data):
-        x_g = self.encoder(data)
+        x_g = self.encoder(data, self.deepsets)
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar)
@@ -192,7 +214,7 @@ class VariationalAutoEncoder(nn.Module):
     def loss_function(self, data, beta=0.05): 
         
         
-        x_g  = self.encoder(data) # This encodes the input graph into a latent space but without any information about the prompt and stats...
+        x_g  = self.encoder(data, self.deepsets) # This encodes the input graph into a latent space but without any information about the prompt and stats...
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar) 
@@ -228,9 +250,10 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         n_layers_enc, 
         n_layers_dec, 
         n_max_nodes,
+        deepsets: DeepSets = None,
         normalize: bool = False,
     ):
-        super().__init__(input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes)
+        super().__init__(input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, deepsets)
         self.encoder = GIN_concat(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
         additional_dim = 7
         if normalize:
@@ -239,7 +262,7 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
 
 
     def forward(self, data):
-        x_g = self.encoder(data)
+        x_g = self.encoder(data, self.deepsets)
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar)
@@ -257,7 +280,7 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         penalization_hyperparameters: float = None,
     ): #this loss variant concatenates the stats to the latent space before decoding
         
-        x_g  = self.encoder(data) # This encodes the input graph into a latent space but without any information about the prompt and stats...
+        x_g  = self.encoder(data, self.deepsets) # This encodes the input graph into a latent space but without any information about the prompt and stats...
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar) 
@@ -288,7 +311,7 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
     def loss_function_concat_stats_pn(self, data, beta=0.05,alpha=0.05): # This loss variants concatenates the stats to the latent space before decoding and tries to punish n_nodes and n_edges
         
         
-        x_g  = self.encoder(data) # This encodes the input graph into a latent space but with info about the prompt and stats...
+        x_g  = self.encoder(data, self.deepsets) # This encodes the input graph into a latent space but with info about the prompt and stats...
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar) 

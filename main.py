@@ -21,9 +21,9 @@ from torch_geometric.data import Data
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 
-from autoencoder import VariationalAutoEncoder_concat, GMVAE
+from autoencoder import VariationalAutoEncoder_concat, GMVAE, DeepSets
 from denoise_model import DenoiseNN, p_losses, sample
-from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset
+from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, create_deepsets_train_dataset
 
 import sys
 
@@ -53,6 +53,12 @@ parser.add_argument('--dropout', type=float, default=0.0, help="Dropout rate (fr
 
 # Batch size for training
 parser.add_argument('--batch-size', type=int, default=256, help="Batch size for training, controlling the number of samples per gradient update (default: 256)")
+
+# Wether to use DeepSets as feature aggregation
+parser.add_argument('--deepsets', action='store_true', default=False, help="Flag to enable/disable DeepSets training (default: disabled)")
+
+# Number of epochs for Deepsets training
+parser.add_argument('--epochs-deepsets', type=int, default=200, help="Number of training epochs for DeepSets (default: 30)")
 
 # Number of epochs for the autoencoder training
 parser.add_argument('--epochs-autoencoder', type=int, default=200, help="Number of training epochs for the autoencoder (default: 200)")
@@ -141,6 +147,56 @@ val_loader = DataLoader(validset, batch_size=args.batch_size, shuffle=False)
 test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 
 
+# Train Deepset for aggregation of features
+if args.deepsets:
+    # File path for saving the model
+    model_path = f'model_deepsets_{args.epochs_deepsets}_{args.hidden_dim_encoder}_{args.batch_size}.pth.tar'
+
+    # Check if the model already exists
+    if os.path.exists(model_path):
+        print(f"Model found at {model_path}. Loading the saved model...")
+        checkpoint = torch.load(model_path)
+        deepsets = DeepSets(args.hidden_dim_encoder).to(device)
+        deepsets.load_state_dict(checkpoint['state_dict'])
+        optimizer_deepset = torch.optim.Adam(deepsets.parameters(), lr=args.lr)
+        optimizer_deepset.load_state_dict(checkpoint['optimizer'])
+        deepsets.eval()
+        print("Loaded the saved DeepSets model.")
+    else:
+        print("No saved model found. Starting training from scratch...")
+
+        # Create training data
+        X_train, y_train, batch = create_deepsets_train_dataset(args.hidden_dim_encoder, args.batch_size, device)
+        deepsets = DeepSets(args.hidden_dim_encoder).to(device)
+        optimizer_deepset = torch.optim.Adam(deepsets.parameters(), lr=args.lr)
+        loss_function = nn.L1Loss()
+
+        # Training loop
+        for epoch in range(args.epochs_deepsets):
+            deepsets.train()
+
+            optimizer_deepset.zero_grad()
+            output = deepsets(X_train, batch)
+            loss = loss_function(output, y_train)
+            loss.backward()
+            optimizer_deepset.step()
+            train_loss = loss.item() * output.size(0)
+            count = output.size(0)
+
+            print('Epoch: {:04d}'.format(epoch+1),
+                'loss_train: {:.4f}'.format(train_loss / count))
+
+        # Save the trained model to disk
+        torch.save({
+            'state_dict': deepsets.state_dict(),
+            'optimizer': optimizer_deepset.state_dict(),
+        }, model_path)
+        deepsets.eval()
+        print("Finished training for DeepSets model")
+        print()
+else:
+    deepsets = None
+
 # initialize VGAE model
 if args.feature_concat:
     autoencoder = VariationalAutoEncoder_concat(
@@ -151,6 +207,7 @@ if args.feature_concat:
         args.n_layers_encoder, 
         args.n_layers_decoder, 
         args.n_max_nodes,
+        deepsets,
         args.normalize,
     ).to(device)
 else:
@@ -166,6 +223,7 @@ else:
         args.n_max_nodes,
         args.n_cat,
     ).to(device)
+
 
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
@@ -367,11 +425,7 @@ with open("output.csv", "w", newline="") as csvfile:
         # sys.exit()
 
         if args.feature_concat:
-            if args.labelize:
-                labels = torch.tensor([data[i].label for i in range(len(data))], device=x_sample.device)  # Shape: (batch_size,)
-                x_sample = torch.cat((x_sample, stat, labels.unsqueeze(1)), dim=1) 
-            else:
-                x_sample = torch.cat((x_sample, stat), dim=1) 
+            x_sample = torch.cat((x_sample, stat), dim=1) 
         else:
             # Assume labels from the test dataset
             labels = torch.tensor([data[i].label for i in range(len(data))], device=x_sample.device)  # Shape: (batch_size,)

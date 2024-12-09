@@ -17,6 +17,7 @@ from tqdm import tqdm
 import scipy.sparse as sparse
 from sklearn.cluster import KMeans
 from torch_geometric.data import Data
+from torch_geometric.utils import scatter
 
 from extract_feats import extract_feats, extract_numbers
 
@@ -259,6 +260,19 @@ def assign_labels(data, n_clusters=3):
 
     return data
 
+def create_deepsets_train_dataset(hidden_dim, batch_size, device):
+    n_train = 100000
+
+    X_train, batch = [], []
+    for i in range(n_train):
+        sample = np.random.normal(0, 5, hidden_dim)
+        X_train.append(sample)
+        batch.append(i // batch_size)
+    
+    X_train = torch.tensor(X_train).to(device).to(torch.float)
+    batch = torch.tensor(batch).to(device)
+    y_train = scatter(X_train, batch, dim=0, reduce='sum').to(device)
+    return X_train, y_train, batch
 
 
 ## testing script
