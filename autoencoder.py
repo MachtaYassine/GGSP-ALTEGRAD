@@ -228,16 +228,14 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         n_layers_enc, 
         n_layers_dec, 
         n_max_nodes,
-        labelize: bool = False,
         normalize: bool = False,
     ):
         super().__init__(input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes)
         self.encoder = GIN_concat(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
-        additional_dim = 7 + int(labelize)
+        additional_dim = 7
         if normalize:
             self.decoder = Decoder_normalized(latent_dim+additional_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
         self.decoder = Decoder(latent_dim+additional_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
-        self.labelize = labelize
 
 
     def forward(self, data):
@@ -246,11 +244,7 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar)
         stats = data.stats  # Shape: (batch_size, num_stats)
-        if self.labelize:
-            labels = torch.tensor([data[i].label for i in range(len(data))], device=x_g.device)  # Shape: (batch_size,)
-            x_g = torch.cat((x_g, stats, labels.unsqueeze(1)), dim=1) 
-        else:
-            x_g = torch.cat((x_g, stats), dim=1) 
+        x_g = torch.cat((x_g, stats), dim=1) 
         adj = self.decoder(x_g)
         return adj
 
@@ -269,11 +263,7 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         x_g = self.reparameterize(mu, logvar) 
         # Concatenate stats and one-hot-encoded labels
         stats = data.stats  # Shape: (batch_size, num_stats)
-        if self.labelize:
-            labels = torch.tensor([data[i].label for i in range(len(data))], device=x_g.device)  # Shape: (batch_size,)
-            x_g = torch.cat((x_g, stats, labels.unsqueeze(1)), dim=1) 
-        else:
-            x_g = torch.cat((x_g, stats), dim=1) 
+        x_g = torch.cat((x_g, stats), dim=1) 
         adj = self.decoder(x_g) # BS*max_nodes*max_nodes This basically randomly sampes a graph from the distribution with no information whatsoever about the input prompt and stats
         
         recon = F.l1_loss(adj, data.A, reduction='mean')

@@ -151,7 +151,6 @@ if args.feature_concat:
         args.n_layers_encoder, 
         args.n_layers_decoder, 
         args.n_max_nodes,
-        args.labelize,
         args.normalize,
     ).to(device)
 else:
