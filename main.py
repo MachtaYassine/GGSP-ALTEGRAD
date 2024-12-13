@@ -23,7 +23,13 @@ from torch_geometric.loader import DataLoader
 
 from autoencoder import VariationalAutoEncoder_concat, GMVAE, DeepSets
 from denoise_model import DenoiseNN, p_losses, sample
-from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, create_deepsets_train_dataset
+from utils import (
+    linear_beta_schedule, 
+    construct_nx_from_adj, 
+    preprocess_dataset, 
+    create_deepsets_train_dataset,
+    to_labels,
+)
 
 import sys
 
@@ -94,7 +100,7 @@ parser.add_argument('--timesteps', type=int, default=500, help="Number of timest
 parser.add_argument('--hidden-dim-denoise', type=int, default=512, help="Hidden dimension size for denoising model layers (default: 512)")
 
 # Number of layers in the denoising model
-parser.add_argument('--n-layers_denoise', type=int, default=3, help="Number of layers in the denoising model (default: 3)")
+parser.add_argument('--n-layers-denoise', type=int, default=3, help="Number of layers in the denoising model (default: 3)")
 
 # Flag to toggle training of the autoencoder (VGAE)
 parser.add_argument('--train-autoencoder', action='store_false', default=True, help="Flag to enable/disable autoencoder (VGAE) training (default: enabled)")
@@ -127,17 +133,15 @@ parser.add_argument('--contrastive-hyperparameters', type=float, nargs=2, defaul
 parser.add_argument('--penalization-hyperparameters', type=float, default=None, 
                     help="Hyperparameter weight for the adjacency penalization term (default: None)")
 
-# Number of categories for the GMVAE model
-parser.add_argument('--n-cat', type=int, default=3, help="Number of gaussians in the mixture model (default: 3)")
 
 args = parser.parse_args()
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 # preprocess train data, validation data and test data. Only once for the first time that you run the code. Then the appropriate .pt files will be saved and loaded.
-trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
-validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
-testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
+trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
+validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
+testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
 
 
 
@@ -213,6 +217,7 @@ if args.feature_concat:
 else:
     if not args.labelize:  # Check if --labelize argument is specified
         raise ValueError("If using GMVAE, you need to labelize your data by specifying --labelize.")
+    to_labels_func = lambda x: to_labels(x, kmeans)
     autoencoder = GMVAE(
         args.spectral_emb_dim+1, 
         args.hidden_dim_encoder, 
@@ -221,7 +226,7 @@ else:
         args.n_layers_encoder, 
         args.n_layers_decoder, 
         args.n_max_nodes,
-        args.n_cat,
+        to_labels_func,
     ).to(device)
 
 
@@ -252,8 +257,8 @@ if args.train_autoencoder:
             else:
                 loss_dict = autoencoder.loss(
                     data,
-                    args.beta,
-                    args.contrastive_hyperparameters,
+                    # args.beta,
+                    # args.contrastive_hyperparameters,
                     )
             
             # Aggregate loss values dynamically
@@ -288,8 +293,8 @@ if args.train_autoencoder:
                 else:
                     loss_dict = autoencoder.loss(
                         data,
-                        args.beta,
-                        args.contrastive_hyperparameters,
+                        # args.beta,
+                        # args.contrastive_hyperparameters,
                         )
 
                 # Aggregate validation loss values
@@ -331,7 +336,7 @@ if args.train_autoencoder:
 else:
     checkpoint = torch.load('autoencoder.pth.tar')
     autoencoder.load_state_dict(checkpoint['state_dict'])
-
+    
 autoencoder.eval()
 
 
@@ -369,7 +374,7 @@ if args.train_denoiser:
             optimizer.zero_grad()
             x_g = autoencoder.encode(data)
             t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-            loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, loss_type="huber")
+            loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, loss_type="l2")
             loss.backward()
             train_loss_all += x_g.size(0) * loss.item()
             train_count += x_g.size(0)
@@ -382,7 +387,7 @@ if args.train_denoiser:
             data = data.to(device)
             x_g = autoencoder.encode(data)
             t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-            loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, loss_type="huber")
+            loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, loss_type="l2")
             val_loss_all += x_g.size(0) * loss.item()
             val_count += x_g.size(0)
 
@@ -431,11 +436,11 @@ with open("output.csv", "w", newline="") as csvfile:
             labels = torch.tensor([data[i].label for i in range(len(data))], device=x_sample.device)  # Shape: (batch_size,)
 
             # Create one-hot encodings for the labels
-            y_onehot = torch.zeros(labels.size(0), args.n_cat, device=labels.device)
-            y_onehot.scatter_(1, labels.unsqueeze(1).long(), 1)
+            # y_onehot = torch.zeros(labels.size(0), 3, device=labels.device)
+            # y_onehot.scatter_(1, labels.unsqueeze(1).long(), 1)
 
             # Concatenate z and y_onehot
-            x_sample = torch.cat([x_sample, stat, y_onehot], dim=1)
+            x_sample = torch.cat([x_sample, stat, labels.unsqueeze(1)], dim=1)
 
         adj = autoencoder.decode_mu(x_sample)
         stat_d = torch.reshape(stat, (-1, args.n_condition))

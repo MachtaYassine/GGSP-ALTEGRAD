@@ -406,75 +406,183 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
 
 
 class GMVAE(VariationalAutoEncoder_concat):
-    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, num_categories=10):
+    def __init__(
+        self, 
+        input_dim, 
+        hidden_dim_enc, 
+        hidden_dim_dec, 
+        latent_dim, 
+        n_layers_enc, 
+        n_layers_dec, 
+        n_max_nodes,
+        to_labels, 
+        label_dim=8
+    ):
         super().__init__(input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes)
-        self.num_categories = num_categories
-        self.qy_fc = nn.Linear(hidden_dim_enc, num_categories)  # Propose distribution over y
-        self.decoder = Decoder(latent_dim+7+num_categories, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        # Label encoder
+        self.label_dim = label_dim
+        self.dropout = nn.Dropout(0.2)
+        self.label_lookup = nn.Linear(label_dim, 64)
+        self.lab = nn.Sequential(
+            nn.Linear(64,  512),
+            nn.ReLU(),
+            self.dropout,
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            self.dropout,
+        )
+        self.lab_mu = nn.Linear(256, latent_dim)
+        self.lab_logvar = nn.Linear(256, latent_dim)
+        # Label decoder
+        self.label_decoder = nn.Sequential(
+            nn.Linear(latent_dim+label_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, 64),
+            nn.LeakyReLU()
+        )
+        # Graph decoder
+        self.decoder = Decoder(latent_dim+label_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        # We need to go from adj matrix back to the labels to then compare
+        # with whats expected so we need to give a function to do that
+        self.to_labels = to_labels
+        self.bce_loss = nn.BCELoss()
+
+    def label_encode(self, labels):
+        """Encodes the graph descriptions with their cluster label."""
+        h0 = self.dropout(F.relu(self.label_lookup(labels)))
+        h = self.lab(h0)
+        mu = self.lab_mu(h)
+        log_var = self.lab_logvar(h)
+        return mu, log_var
+    
+    def feat_encode(self, data):
+        """Encodes the graphs."""
+        x_g  = self.encoder(data, self.deepsets)
+        mu = self.fc_mu(x_g)
+        logvar = self.fc_logvar(x_g)
+        return mu, logvar
+    
+    def label_forward(self, labels):
+        """Encodes and decodes labels."""
+        n_label = labels.shape[1]
+        all_labels = torch.eye(n_label).to(labels.device)
+        mu_label, log_var_label = self.label_encode(all_labels)
+        
+        z = torch.matmul(labels, mu_label) / labels.sum(1, keepdim=True)
+        label_emb = self.label_decoder(torch.cat((z, labels), 1))
+
+        return mu_label, log_var_label, label_emb
+
+    def feat_forward(self, labels, data):
+        """Encodes graphs and generate sample from the latent space"""
+        mu, log_var = self.feat_encode(data)
+
+        if not self.training:
+            z = mu
+        else:
+            z = self.reparameterize(mu, log_var)
+        adj = self.decoder(torch.cat((z, labels), 1))
+
+        _ , _ , feat_emb = self.label_forward(self.to_labels(adj))
+
+        return adj, feat_emb, mu, log_var
 
     def forward(self, data):
         # Encoding
-        x_g = self.encoder(data)
-        qy_logits = self.qy_fc(x_g)  # Categorical logits for q(y)
-        qy_probs = F.softmax(qy_logits, dim=-1)
-        stats = data.stats
-        labels = torch.tensor([data[i].label for i in range(len(data))], device=x_g.device)  # Shape: (batch_size,)
+        cluster_labels = torch.tensor([data[i].label for i in range(len(data))], device="cuda")  # Shape: (batch_size,)
+        labels = torch.cat((data.stats, cluster_labels.unsqueeze(1)), 1)
+        adj, feat_emb, mu, log_var = self.feat_forward(labels, data)
+        mu_label, log_var_label, label_emb = self.label_forward(labels)
 
-        z_samples, reconstructions = [], []
-        for i in range(self.num_categories):
-            y_onehot = F.one_hot(torch.tensor([i] * x_g.size(0)), num_classes=self.num_categories).to(x_g.device)
-            y_onehot = y_onehot.float()
-            # Select only embeddings of the category
-            mask = (labels == i).unsqueeze(1)
-            x_g_cat = x_g * mask
-            y_onehot = y_onehot * mask
-            cat_stats = stats * mask
-            
-            # Infer z for this category
-            z_mean = self.fc_mu(x_g_cat)
-            z_logvar = self.fc_logvar(x_g_cat)
-            z = self.reparameterize(z_mean, z_logvar)
-            
-            # Decode for this category
-            z_y = torch.cat([z, cat_stats, y_onehot], dim=1)
-            adj = self.decoder(z_y)
-            
-            z_samples.append((z_mean, z_logvar))
-            reconstructions.append(adj)
+        # Align
+        embs = self.label_lookup.weight
+        label_out = torch.matmul(label_emb, embs)
+        feat_out = torch.matmul(feat_emb, embs)
 
-        return qy_probs, z_samples, reconstructions
-    
-    def loss(self, data, beta=0.05, contrastive_hyperparameters: list = None):
-        # Encoding
-        qy_probs, z_samples, reconstructions = self.forward(data)
-
-        nent_loss = -torch.sum(qy_probs * torch.log(qy_probs + 1e-8), dim=-1).mean()  # Negative entropy loss
-
-        # Loss for each category
-        recon_losses, kld_losses, contrastive_losses = [], [], []
-        for i, (z_sample, recon) in enumerate(zip(z_samples, reconstructions)):
-            z_mean, z_logvar = z_sample
-            kld = -0.5 * torch.sum(1 + z_logvar - z_mean.pow(2) - z_logvar.exp(), dim=-1).mean()
-            recon_loss = F.l1_loss(recon, data.A, reduction='mean')  # or other reconstruction loss
-            if contrastive_hyperparameters is not None:
-                contrastive_loss = self.get_weighted_contrastive_loss(z_mean, z_logvar, data, contrastive_hyperparameters[0], contrastive_hyperparameters[1])
-                contrastive_losses.append(contrastive_loss)
-            recon_losses.append(recon_loss)
-            kld_losses.append(kld)
-
-        # Combine losses weighted by q(y)
-        recon_loss = sum(qy_probs[:, i] * recon_losses[i] for i in range(len(reconstructions))).mean()
-        kld_loss = sum(qy_probs[:, i] * kld_losses[i] for i in range(len(z_samples))).mean()
-        results = {
-            "loss": recon_loss + beta * kld_loss + nent_loss,
-            "recon": recon_loss,
-            "kld": kld_loss,
-            "negative_entropy": nent_loss,
+        output = {
+            'adj': adj,
+            'mu': mu,
+            'log_var': log_var,
+            'feat_emb': feat_emb,
+            'mu_label': mu_label,
+            'log_var_label': log_var_label,
+            'label_emb': label_emb,
+            'embs': embs,
+            'label_out': label_out,
+            'feat_out': feat_out,
+            'input_label': labels,
         }
+        return output
+    
+    def loss(self, data):
+        output = self.forward(data)
+        input_label = output['input_label']
+        label_out, mu_label, log_var_label, label_emb = \
+            output['label_out'], output['mu_label'], output['log_var_label'], output['label_emb']
+        feat_out, mu, log_var, feat_emb, adj = \
+            output['feat_out'], output['mu'], output['log_var'], output['feat_emb'], output['adj']
+        embs = output['embs']
 
-        if contrastive_hyperparameters is not None:
-            contrastive_loss = sum(qy_probs[:, i] * contrastive_losses[i] for i in range(len(z_samples))).mean()
-            results["contrastive_loss"] = contrastive_loss
+        fx_sample = self.reparameterize(mu, log_var)
+        fx_var = torch.exp(log_var)
+        fe_var = torch.exp(log_var_label)
 
+        def supconloss(label_emb, feat_emb, embs, temp=1.0):
+            features = torch.cat((label_emb, feat_emb))
+            labels = torch.cat((input_label, input_label)).float()
+            n_label = labels.shape[1]
+            emb_labels = torch.eye(n_label).to("cuda")
+            mask = torch.matmul(labels, emb_labels)
+
+            anchor_dot_contrast = torch.div(
+                torch.matmul(features, embs),
+                temp)
+            logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
+            logits = anchor_dot_contrast - logits_max.detach()
+
+            exp_logits = torch.exp(logits)
+            log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))
+
+            mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
+            loss = -mean_log_prob_pos
+            loss = loss.mean()
+            return loss
+        
+        def log_normal(x, m, v):
+            log_prob = (-0.5 * (torch.log(v) + (x-m).pow(2) / v)).sum(-1)
+            return log_prob
+
+        def log_normal_mixture(z, m, v, mask=None):
+            m = m.unsqueeze(0).expand(z.shape[0], -1, -1)
+            v = v.unsqueeze(0).expand(z.shape[0], -1, -1)
+            batch, mix, dim = m.size()
+            z = z.view(batch, 1, dim).expand(batch, mix, dim)
+            indiv_log_prob = log_normal(z, m, v)
+            log_prob = log_mean_exp(indiv_log_prob, mask)
+            return log_prob
+
+        def log_mean_exp(x, mask):
+            return log_sum_exp(x, mask) - torch.log(mask.sum(1))
+
+        def log_sum_exp(x, mask):
+            max_x = torch.max(x, 1)[0]
+            new_x = x - max_x.unsqueeze(1).expand_as(x)
+            return max_x + (new_x.exp().sum(1)).log()
+
+        recon_graph = F.l1_loss(adj, data.A, reduction='mean')
+        mse_labels = F.mse_loss(label_out, input_label)
+        mse_graph_features = F.mse_loss(feat_out, input_label)
+        mse = mse_labels + mse_graph_features
+        kl_loss = (log_normal(fx_sample, mu, fx_var) - \
+            log_normal_mixture(fx_sample, mu_label, fe_var, input_label)).mean()
+        cpc_loss = supconloss(label_emb, feat_emb, embs)
+        total_loss = 0.01 * mse + kl_loss * 1.0 + cpc_loss + recon_graph
+        results = {
+            'loss': total_loss,
+            'kl': kl_loss,
+            'cpc': cpc_loss,
+            'recon': recon_graph,
+            'mse': mse,
+        }
         return results
     

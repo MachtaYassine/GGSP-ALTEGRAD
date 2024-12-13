@@ -7,6 +7,7 @@ import scipy.sparse
 import torch
 import torch.nn.functional as F
 import community as community_louvain
+from joblib import Parallel, delayed
 
 from torch import Tensor
 from torch.utils.data import Dataset
@@ -17,7 +18,7 @@ from tqdm import tqdm
 import scipy.sparse as sparse
 from sklearn.cluster import KMeans
 from torch_geometric.data import Data
-from torch_geometric.utils import scatter
+from torch_geometric.utils import scatter, to_dense_adj, dense_to_sparse, degree
 
 from extract_feats import extract_feats, extract_numbers
 
@@ -32,6 +33,8 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
+            if labelize:
+                data_lst, kmeans = assign_labels(data_lst)
             print(f'Dataset {filename} loaded from file')
 
         else:
@@ -47,7 +50,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
                 feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
                 data_lst.append(Data(stats=feats_stats, filename = graph_id)) #prompt=desc for testing
             if labelize:
-                data_lst = assign_labels(data_lst)
+                data_lst, kmeans = assign_labels(data_lst)
             fr.close()                    
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
@@ -60,6 +63,8 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
+            if labelize:
+                data_lst, kmeans = assign_labels(data_lst)
             print(f'Dataset {filename} loaded from file')
 
         else:
@@ -146,9 +151,12 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
 
                 data_lst.append(Data(x=x, edge_index=edge_index, A=adj, stats=feats_stats, filename = filen))
             if labelize:
-                data_lst = assign_labels(data_lst)
+                data_lst, kmeans = assign_labels(data_lst)
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
+
+    if labelize:
+        return data_lst, kmeans
     return data_lst
 
 
@@ -258,7 +266,7 @@ def assign_labels(data, n_clusters=3):
     for graph, label in zip(data, labels):
         graph.label = torch.tensor([label])  # Add the label as a tensor
 
-    return data
+    return data, kmeans
 
 def create_deepsets_train_dataset(hidden_dim, batch_size, device):
     n_train = 100000
@@ -273,6 +281,195 @@ def create_deepsets_train_dataset(hidden_dim, batch_size, device):
     batch = torch.tensor(batch).to(device)
     y_train = scatter(X_train, batch, dim=0, reduce='sum').to(device)
     return X_train, y_train, batch
+
+# Function to compute graph features
+def compute_graph_features_from_adj(adj_matrix):
+    graph = nx.from_numpy_array(adj_matrix)
+
+    # Compute features
+    n_nodes = graph.number_of_nodes()
+    n_edges = graph.number_of_edges()
+    avg_degree = sum(dict(graph.degree()).values()) / n_nodes if n_nodes > 0 else 0
+    n_triangles = sum(nx.triangles(graph).values()) // 3
+    clustering_coeff = nx.average_clustering(graph)
+    max_core = max(nx.core_number(graph).values())
+    communities = nx.community.greedy_modularity_communities(graph)
+    n_communities = len(communities)
+
+    return [n_nodes, n_edges, avg_degree, n_triangles, clustering_coeff, max_core, n_communities]
+
+def compute_graph_features_from_adj_torch(adj_matrix):
+    """
+    Computes graph features using PyTorch Geometric utilities.
+
+    Args:
+        adj_matrix: PyTorch tensor of shape (num_nodes, num_nodes), representing the adjacency matrix.
+
+    Returns:
+        A list of graph features.
+    """
+    # Basic graph properties
+    num_nodes = adj_matrix.size(0)
+    num_edges = torch.count_nonzero(adj_matrix) // 2  # Each edge is counted twice in an adjacency matrix
+    degrees = adj_matrix.sum(dim=1)
+    avg_degree = degrees.mean().item()
+    n_triangles = torch.trace(torch.matrix_power(adj_matrix, 3)) // 6
+
+    # Clustering coefficient
+    denom = degrees * (degrees - 1)
+    clustering_coeff = (torch.diagonal(torch.matrix_power(adj_matrix, 3)) / denom.clamp(min=1)).mean().item()
+
+    # Community detection
+    edge_index = dense_to_sparse(adj_matrix)[0]
+    communities = greedy_modularity_communities(edge_index, num_nodes)
+    num_communities = len(communities)
+
+    # Maximum core number (approximation as max degree for simplicity)
+    max_core = max_core_number(edge_index, num_nodes)
+
+    return [
+        num_nodes,
+        num_edges.item(),
+        avg_degree,
+        n_triangles.item(),
+        clustering_coeff,
+        max_core,
+        num_communities,
+    ]
+
+
+def greedy_modularity_communities(edge_index, num_nodes):
+    """
+    Implements modularity-based community detection using a greedy approach.
+
+    Args:
+        edge_index: Tensor of shape (2, num_edges) containing edge indices.
+        num_nodes: The total number of nodes in the graph.
+
+    Returns:
+        communities: A list of lists, where each sublist represents a community's nodes.
+    """
+    # Initialize each node as its own community
+    communities = [[i] for i in range(num_nodes)]
+
+    # Convert edge_index to adjacency matrix
+    adj_matrix = to_dense_adj(edge_index, max_num_nodes=num_nodes).squeeze(0)
+    degrees = adj_matrix.sum(dim=1)
+
+    m = adj_matrix.sum().item()  # Total edge weight
+
+    def compute_modularity_gain(u, v, community):
+        # Computes modularity gain for merging `u` and `v` into `community`
+        deg_u = degrees[u]
+        deg_v = degrees[v]
+        delta_modularity = (
+            adj_matrix[u, v] - (deg_u * deg_v) / (2 * m)
+        )
+        return delta_modularity
+
+    improved = True
+    while improved:
+        improved = False
+        for i, community in enumerate(communities):
+            for j in range(len(communities)):
+                if i == j:
+                    continue
+                # Try merging community i and j
+                gain = sum(
+                    compute_modularity_gain(u, v, communities[j])
+                    for u in community
+                    for v in communities[j]
+                )
+                if gain > 0:
+                    # Merge communities
+                    communities[j].extend(community)
+                    communities.pop(i)
+                    improved = True
+                    break
+            if improved:
+                break
+
+    return communities
+
+def max_core_number(edge_index, num_nodes):
+    """
+    Compute the maximum core number (core decomposition) using PyTorch Geometric.
+    
+    Args:
+        edge_index (torch.Tensor): The edge indices of the graph.
+        num_nodes (int): The number of nodes in the graph.
+        
+    Returns:
+        torch.Tensor: The maximum core number of the graph.
+    """
+    # Compute the degree of each node
+    deg = degree(edge_index[0], num_nodes=num_nodes).to(torch.int)
+    
+    # Core number initialization: each node's core number starts at its degree
+    core_numbers = deg.clone()
+    
+    # Sorting nodes by degree (ascending order)
+    sorted_nodes = torch.argsort(deg)
+    
+    # Core decomposition to compute the core number of each node
+    for node in sorted_nodes:
+        neighbors = edge_index[1][edge_index[0] == node]
+        min_core = min([core_numbers[neighbor] for neighbor in neighbors] + [deg[node]])
+        core_numbers[node] = min_core
+    
+    # The max core number is the maximum of the core numbers
+    max_core = torch.max(core_numbers).item()
+    
+    return max_core
+
+
+# def to_labels(adj, kmeans):
+#     """
+#     Computes graph features and clustering labels using torch_geometric utilities.
+#     """
+#     kmeans.cluster_centers_ = kmeans.cluster_centers_.astype(float) # Handles type errors
+#     all_properties = []
+#     for adj_matrix in adj:
+#         # Compute graph features for each adjacency matrix
+#         properties = compute_graph_features_from_adj_torch(adj_matrix)
+#         all_properties.append(properties)
+    
+#     # Convert features to numpy float64
+#     all_properties = np.array(all_properties, dtype=np.float64)
+    
+#     # Cluster label prediction
+#     labels = kmeans.predict(all_properties)  # Predict labels for all graphs in the batch
+    
+#     # Add the labels to the properties
+#     all_properties_with_labels = np.hstack((all_properties, labels.reshape(-1, 1)))
+    
+#     # Transform back to a tensor of size (batch_size, nfeatures + 1)
+#     return torch.tensor(all_properties_with_labels, dtype=torch.float32).to(adj.device)
+
+def to_labels(adj, kmeans):
+    """
+    Computes graph features and clustering labels using torch_geometric utilities.
+    """
+    kmeans.cluster_centers_ = kmeans.cluster_centers_.astype(float)  # Handles type errors
+    
+    arr_adj = adj.detach().cpu().numpy()
+    # Use joblib for parallel computation
+    all_properties = Parallel(n_jobs=-1)(
+        delayed(compute_graph_features_from_adj)(adj_matrix) for adj_matrix in arr_adj
+    )
+    
+    # Convert features to numpy float64
+    all_properties = np.array(all_properties, dtype=np.float64)
+    
+    # Cluster label prediction
+    labels = kmeans.predict(all_properties)  # Predict labels for all graphs in the batch
+    
+    # Add the labels to the properties
+    all_properties_with_labels = np.hstack((all_properties, labels.reshape(-1, 1)))
+    
+    # Transform back to a tensor of size (batch_size, nfeatures + 1)
+    return torch.tensor(all_properties_with_labels, dtype=torch.float32).to(adj.device)
+
 
 
 ## testing script

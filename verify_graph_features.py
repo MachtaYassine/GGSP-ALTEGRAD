@@ -2,29 +2,13 @@ import pandas as pd
 import networkx as nx
 import ast
 from typing import List
-from utils import preprocess_dataset, Data
+from utils import preprocess_dataset, compute_graph_features_from_adj, Data
 import os
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
 import argparse
 
-
-# Function to compute graph features
-def compute_graph_features_from_adj(adj_matrix):
-    graph = nx.from_numpy_array(adj_matrix)
-
-    # Compute features
-    n_nodes = graph.number_of_nodes()
-    n_edges = graph.number_of_edges()
-    avg_degree = sum(dict(graph.degree()).values()) / n_nodes if n_nodes > 0 else 0
-    n_triangles = sum(nx.triangles(graph).values()) // 3
-    clustering_coeff = nx.average_clustering(graph)
-    max_core = max(nx.core_number(graph).values())
-    communities = nx.community.greedy_modularity_communities(graph)
-    n_communities = len(communities)
-
-    return [n_nodes, n_edges, avg_degree, n_triangles, clustering_coeff, max_core, n_communities]
 
 # Load graphs into a DataFrame
 def load_graphs_into_dataframe(csv_path):
