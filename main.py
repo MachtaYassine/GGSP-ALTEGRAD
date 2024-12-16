@@ -122,6 +122,10 @@ parser.add_argument('--normalize', action='store_true', default=False, help="Fla
 # Labelize for contrastive learning
 parser.add_argument('--labelize', action='store_true', default=False, help="Flag to enable/disable labelization of graphs into clusters (default: disabled)")
 
+# Early stopping of VAE training
+parser.add_argument('--early-stopping', action='store_true', default=False, help="Flag to enable/disable early stopping of VAE training (default: disabled)")
+
+
 # Beta for KLD loss weight
 parser.add_argument('--beta', type=float, default=0.05, help="Weight for the KLD loss term in the total loss calculation (default: 0.05)")
 
@@ -132,6 +136,10 @@ parser.add_argument('--contrastive-hyperparameters', type=float, nargs=2, defaul
 # Penalization hyperparameter
 parser.add_argument('--penalization-hyperparameters', type=float, default=None, 
                     help="Hyperparameter weight for the adjacency penalization term (default: None)")
+
+# GMVAE loss hyperparameters
+parser.add_argument('--gmvae-loss-parameters', type=float, nargs=4, default=None, 
+                    help="[con_temperature, alpha_mse, mse_weight, kl_weight] (default: None)")
 
 
 args = parser.parse_args()
@@ -293,8 +301,7 @@ if args.train_autoencoder:
                 else:
                     loss_dict = autoencoder.loss(
                         data,
-                        # args.beta,
-                        # args.contrastive_hyperparameters,
+                        *args.gmvae_loss_parameters,
                         )
 
                 # Aggregate validation loss values
@@ -332,7 +339,7 @@ if args.train_autoencoder:
             break
         
         if epoch > 20 and best_val_loss < val_loss_trackers["loss"]:
-            early_stop_counter += 1
+            early_stop_counter += int(args.early_stopping)
 else:
     checkpoint = torch.load('autoencoder.pth.tar')
     autoencoder.load_state_dict(checkpoint['state_dict'])

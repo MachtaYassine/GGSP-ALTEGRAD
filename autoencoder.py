@@ -514,7 +514,14 @@ class GMVAE(VariationalAutoEncoder_concat):
         }
         return output
     
-    def loss(self, data):
+    def loss(
+        self, 
+        data,
+        con_temprature = 1.0,
+        alpha_mse = 0.5,
+        mse_weight = 0.01,
+        kl_weight = 1.0,
+    ):
         output = self.forward(data)
         input_label = output['input_label']
         label_out, mu_label, log_var_label, label_emb = \
@@ -527,7 +534,7 @@ class GMVAE(VariationalAutoEncoder_concat):
         fx_var = torch.exp(log_var)
         fe_var = torch.exp(log_var_label)
 
-        def supconloss(label_emb, feat_emb, embs, temp=1.0):
+        def supconloss(label_emb, feat_emb, embs):
             features = torch.cat((label_emb, feat_emb))
             labels = torch.cat((input_label, input_label)).float()
             n_label = labels.shape[1]
@@ -536,7 +543,7 @@ class GMVAE(VariationalAutoEncoder_concat):
 
             anchor_dot_contrast = torch.div(
                 torch.matmul(features, embs),
-                temp)
+                con_temprature)
             logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
             logits = anchor_dot_contrast - logits_max.detach()
 
@@ -572,11 +579,11 @@ class GMVAE(VariationalAutoEncoder_concat):
         recon_graph = F.l1_loss(adj, data.A, reduction='mean')
         mse_labels = F.mse_loss(label_out, input_label)
         mse_graph_features = F.mse_loss(feat_out, input_label)
-        mse = mse_labels + mse_graph_features
+        mse = alpha_mse * mse_labels + (1 - alpha_mse) * mse_graph_features
         kl_loss = (log_normal(fx_sample, mu, fx_var) - \
             log_normal_mixture(fx_sample, mu_label, fe_var, input_label)).mean()
         cpc_loss = supconloss(label_emb, feat_emb, embs)
-        total_loss = 0.01 * mse + kl_loss * 1.0 + cpc_loss + recon_graph
+        total_loss = mse_weight * mse + kl_weight * kl_loss + cpc_loss + recon_graph
         results = {
             'loss': total_loss,
             'kl': kl_loss,
