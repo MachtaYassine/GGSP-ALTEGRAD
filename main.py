@@ -21,9 +21,15 @@ from torch_geometric.data import Data
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 
-from autoencoder import VariationalAutoEncoder
+from autoencoder import VariationalAutoEncoder_concat, GMVAE, DeepSets
 from denoise_model import DenoiseNN, p_losses, sample
-from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset
+from utils import (
+    linear_beta_schedule, 
+    construct_nx_from_adj, 
+    preprocess_dataset, 
+    create_deepsets_train_dataset,
+    to_labels,
+)
 
 import sys
 
@@ -53,6 +59,12 @@ parser.add_argument('--dropout', type=float, default=0.0, help="Dropout rate (fr
 
 # Batch size for training
 parser.add_argument('--batch-size', type=int, default=256, help="Batch size for training, controlling the number of samples per gradient update (default: 256)")
+
+# Wether to use DeepSets as feature aggregation
+parser.add_argument('--deepsets', action='store_true', default=False, help="Flag to enable/disable DeepSets training (default: disabled)")
+
+# Number of epochs for Deepsets training
+parser.add_argument('--epochs-deepsets', type=int, default=200, help="Number of training epochs for DeepSets (default: 30)")
 
 # Number of epochs for the autoencoder training
 parser.add_argument('--epochs-autoencoder', type=int, default=200, help="Number of training epochs for the autoencoder (default: 200)")
@@ -88,7 +100,7 @@ parser.add_argument('--timesteps', type=int, default=500, help="Number of timest
 parser.add_argument('--hidden-dim-denoise', type=int, default=512, help="Hidden dimension size for denoising model layers (default: 512)")
 
 # Number of layers in the denoising model
-parser.add_argument('--n-layers_denoise', type=int, default=3, help="Number of layers in the denoising model (default: 3)")
+parser.add_argument('--n-layers-denoise', type=int, default=3, help="Number of layers in the denoising model (default: 3)")
 
 # Flag to toggle training of the autoencoder (VGAE)
 parser.add_argument('--train-autoencoder', action='store_false', default=True, help="Flag to enable/disable autoencoder (VGAE) training (default: enabled)")
@@ -102,15 +114,42 @@ parser.add_argument('--dim-condition', type=int, default=128, help="Dimensionali
 # Number of conditions used in conditional vector (number of properties)
 parser.add_argument('--n-condition', type=int, default=7, help="Number of distinct condition properties used in conditional vector (default: 7)")
 
+# Whether to train VAE_concat od GMVAE
+parser.add_argument('--feature-concat', action='store_true', default=False, help="Use GMVAE model by default, other is concat (default: disabled)")
+
 parser.add_argument('--normalize', action='store_true', default=False, help="Flag to enable/disable normalization of adjacency matrix (default: disabled)")
+
+# Labelize for contrastive learning
+parser.add_argument('--labelize', action='store_true', default=False, help="Flag to enable/disable labelization of graphs into clusters (default: disabled)")
+
+# Early stopping of VAE training
+parser.add_argument('--early-stopping', action='store_true', default=False, help="Flag to enable/disable early stopping of VAE training (default: disabled)")
+
+
+# Beta for KLD loss weight
+parser.add_argument('--beta', type=float, default=0.05, help="Weight for the KLD loss term in the total loss calculation (default: 0.05)")
+
+# Contrastive hyperparameters
+parser.add_argument('--contrastive-hyperparameters', type=float, nargs=2, default=None, 
+                    help="Two hyperparameters for contrastive loss: contrastive and entropy weights (default: None)")
+
+# Penalization hyperparameter
+parser.add_argument('--penalization-hyperparameters', type=float, default=None, 
+                    help="Hyperparameter weight for the adjacency penalization term (default: None)")
+
+# GMVAE loss hyperparameters
+parser.add_argument('--gmvae-loss-parameters', type=float, nargs=4, default=None, 
+                    help="[con_temperature, alpha_mse, mse_weight, kl_weight] (default: None)")
+
+
 args = parser.parse_args()
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 # preprocess train data, validation data and test data. Only once for the first time that you run the code. Then the appropriate .pt files will be saved and loaded.
-trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim,args.normalize)
-validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim,args.normalize)
-testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim,args.normalize)
+trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
+validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
+testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
 
 
 
@@ -120,8 +159,84 @@ val_loader = DataLoader(validset, batch_size=args.batch_size, shuffle=False)
 test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 
 
+# Train Deepset for aggregation of features
+if args.deepsets:
+    # File path for saving the model
+    model_path = f'model_deepsets_{args.epochs_deepsets}_{args.hidden_dim_encoder}_{args.batch_size}.pth.tar'
+
+    # Check if the model already exists
+    if os.path.exists(model_path):
+        print(f"Model found at {model_path}. Loading the saved model...")
+        checkpoint = torch.load(model_path)
+        deepsets = DeepSets(args.hidden_dim_encoder).to(device)
+        deepsets.load_state_dict(checkpoint['state_dict'])
+        optimizer_deepset = torch.optim.Adam(deepsets.parameters(), lr=args.lr)
+        optimizer_deepset.load_state_dict(checkpoint['optimizer'])
+        deepsets.eval()
+        print("Loaded the saved DeepSets model.")
+    else:
+        print("No saved model found. Starting training from scratch...")
+
+        # Create training data
+        X_train, y_train, batch = create_deepsets_train_dataset(args.hidden_dim_encoder, args.batch_size, device)
+        deepsets = DeepSets(args.hidden_dim_encoder).to(device)
+        optimizer_deepset = torch.optim.Adam(deepsets.parameters(), lr=args.lr)
+        loss_function = nn.L1Loss()
+
+        # Training loop
+        for epoch in range(args.epochs_deepsets):
+            deepsets.train()
+
+            optimizer_deepset.zero_grad()
+            output = deepsets(X_train, batch)
+            loss = loss_function(output, y_train)
+            loss.backward()
+            optimizer_deepset.step()
+            train_loss = loss.item() * output.size(0)
+            count = output.size(0)
+
+            print('Epoch: {:04d}'.format(epoch+1),
+                'loss_train: {:.4f}'.format(train_loss / count))
+
+        # Save the trained model to disk
+        torch.save({
+            'state_dict': deepsets.state_dict(),
+            'optimizer': optimizer_deepset.state_dict(),
+        }, model_path)
+        deepsets.eval()
+        print("Finished training for DeepSets model")
+        print()
+else:
+    deepsets = None
+
 # initialize VGAE model
-autoencoder = VariationalAutoEncoder(args.spectral_emb_dim+1, args.hidden_dim_encoder, args.hidden_dim_decoder, args.latent_dim, args.n_layers_encoder, args.n_layers_decoder, args.n_max_nodes).to(device)
+if args.feature_concat:
+    autoencoder = VariationalAutoEncoder_concat(
+        args.spectral_emb_dim+1, 
+        args.hidden_dim_encoder, 
+        args.hidden_dim_decoder, 
+        args.latent_dim, 
+        args.n_layers_encoder, 
+        args.n_layers_decoder, 
+        args.n_max_nodes,
+        deepsets,
+        args.normalize,
+    ).to(device)
+else:
+    if not args.labelize:  # Check if --labelize argument is specified
+        raise ValueError("If using GMVAE, you need to labelize your data by specifying --labelize.")
+    to_labels_func = lambda x: to_labels(x, kmeans)
+    autoencoder = GMVAE(
+        args.spectral_emb_dim+1, 
+        args.hidden_dim_encoder, 
+        args.hidden_dim_decoder, 
+        args.latent_dim, 
+        args.n_layers_encoder, 
+        args.n_layers_decoder, 
+        args.n_max_nodes,
+        to_labels_func,
+    ).to(device)
+
 
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
@@ -133,52 +248,88 @@ if args.train_autoencoder:
     early_stop_counter = 0
     for epoch in range(1, args.epochs_autoencoder+1):
         autoencoder.train()
-        train_loss_all = 0
-        train_count = 0
-        train_loss_all_recon = 0
-        train_loss_all_kld = 0
-        
-        cnt_train=0
-
+        train_loss_trackers = {}
+        val_loss_trackers = {}
         for data in train_loader:
             data = data.to(device)
             optimizer.zero_grad()
-            loss, recon, kld  = autoencoder.loss_function_concat_stats(data) #loss_function
-            train_loss_all_recon += recon.item()
-            train_loss_all_kld += kld.item()
+
+            # Call loss function
+            if args.feature_concat:
+                loss_dict = autoencoder.loss(
+                    data,
+                    args.beta,
+                    args.contrastive_hyperparameters,
+                    args.penalization_hyperparameters,
+                    )
+            else:
+                loss_dict = autoencoder.loss(
+                    data,
+                    # args.beta,
+                    # args.contrastive_hyperparameters,
+                    )
             
-            cnt_train+=1
-            loss.backward()
-            train_loss_all += loss.item()
-            train_count += torch.max(data.batch)+1
+            # Aggregate loss values dynamically
+            for key, value in loss_dict.items():
+                if key not in train_loss_trackers:
+                    train_loss_trackers[key] = 0.0
+                train_loss_trackers[key] += value.item()
+
+            # Backpropagation
+            loss_dict["loss"].backward()
             optimizer.step()
 
+        # Calculate averages for the epoch
+        train_count = len(train_loader.dataset)
+        for key in train_loss_trackers:
+            train_loss_trackers[key] /= train_count
+
+        # Validation
         autoencoder.eval()
-        val_loss_all = 0
-        val_count = 0
-        cnt_val = 0
-        val_loss_all_recon = 0
-        val_loss_all_kld = 0
-        
+        with torch.no_grad():
+            for data in val_loader:
+                data = data.to(device)
 
-        for data in val_loader:
-            data = data.to(device)
-            loss, recon, kld  = autoencoder.loss_function_concat_stats(data) #loss_function
-            val_loss_all_recon += recon.item()
-            val_loss_all_kld += kld.item()
-            val_loss_all += loss.item()
-            
-            cnt_val+=1
-            val_count += torch.max(data.batch)+1
+                # Call loss function
+                if args.feature_concat:
+                    loss_dict = autoencoder.loss(
+                        data,
+                        args.beta,
+                        args.contrastive_hyperparameters,
+                        args.penalization_hyperparameters,
+                        )
+                else:
+                    loss_dict = autoencoder.loss(
+                        data,
+                        *args.gmvae_loss_parameters,
+                        )
 
-        if epoch % 1 == 0:
-            dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-            print('{} Epoch: {:04d}, Train Loss: {:.5f}, Train Reconstruction Loss: {:.2f}, Train KLD Loss: {:.2f},  Val Loss: {:.5f}, Val Reconstruction Loss: {:.2f}, Val KLD Loss: {:.2f}'.format(dt_t, epoch, train_loss_all/train_count, train_loss_all_recon/cnt_train, train_loss_all_kld/cnt_train ,val_loss_all/val_count, val_loss_all_recon/cnt_val, val_loss_all_kld/cnt_val, ))
-            
+                # Aggregate validation loss values
+                for key, value in loss_dict.items():
+                    if key not in val_loss_trackers:
+                        val_loss_trackers[key] = 0.0
+                    val_loss_trackers[key] += value.item()
+
+        # Calculate averages for validation
+        val_count = len(val_loader.dataset)
+        for key in val_loss_trackers:
+            val_loss_trackers[key] /= val_count
+
+        # Print losses dynamically
+        dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        loss_str = ", ".join(
+            [f"{key.capitalize()} Loss: {value:.5f}" for key, value in train_loss_trackers.items()]
+        )
+        print(f"{dt_t} Epoch: {epoch:04d}, Train {loss_str}")
+        loss_str = ", ".join(
+            [f"{key.capitalize()} Loss: {value:.5f}" for key, value in val_loss_trackers.items()]
+        )
+        print(f"{dt_t} Epoch: {epoch:04d}, Val {loss_str}")
+
         scheduler.step()
 
-        if best_val_loss >= val_loss_all:
-            best_val_loss = val_loss_all
+        if best_val_loss >= val_loss_trackers["loss"]:
+            best_val_loss = val_loss_trackers["loss"]
             torch.save({
                 'state_dict': autoencoder.state_dict(),
                 'optimizer' : optimizer.state_dict(),
@@ -187,12 +338,12 @@ if args.train_autoencoder:
         if early_stop_counter >= 20:
             break
         
-        if epoch > 20 and best_val_loss < val_loss_all:
-            early_stop_counter += 1
+        if epoch > 20 and best_val_loss < val_loss_trackers["loss"]:
+            early_stop_counter += int(args.early_stopping)
 else:
     checkpoint = torch.load('autoencoder.pth.tar')
     autoencoder.load_state_dict(checkpoint['state_dict'])
-
+    
 autoencoder.eval()
 
 
@@ -230,7 +381,7 @@ if args.train_denoiser:
             optimizer.zero_grad()
             x_g = autoencoder.encode(data)
             t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-            loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, loss_type="huber")
+            loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, loss_type="l2")
             loss.backward()
             train_loss_all += x_g.size(0) * loss.item()
             train_count += x_g.size(0)
@@ -243,7 +394,7 @@ if args.train_denoiser:
             data = data.to(device)
             x_g = autoencoder.encode(data)
             t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-            loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, loss_type="huber")
+            loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, loss_type="l2")
             val_loss_all += x_g.size(0) * loss.item()
             val_count += x_g.size(0)
 
@@ -284,7 +435,21 @@ with open("output.csv", "w", newline="") as csvfile:
         x_sample = samples[-1]
         # print(x_sample.shape)
         # sys.exit()
-        adj = autoencoder.decode_mu(torch.cat([x_sample, stat], dim=1))
+
+        if args.feature_concat:
+            x_sample = torch.cat((x_sample, stat), dim=1) 
+        else:
+            # Assume labels from the test dataset
+            labels = torch.tensor([data[i].label for i in range(len(data))], device=x_sample.device)  # Shape: (batch_size,)
+
+            # Create one-hot encodings for the labels
+            # y_onehot = torch.zeros(labels.size(0), 3, device=labels.device)
+            # y_onehot.scatter_(1, labels.unsqueeze(1).long(), 1)
+
+            # Concatenate z and y_onehot
+            x_sample = torch.cat([x_sample, stat, labels.unsqueeze(1)], dim=1)
+
+        adj = autoencoder.decode_mu(x_sample)
         stat_d = torch.reshape(stat, (-1, args.n_condition))
 
 

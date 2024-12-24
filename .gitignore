@@ -6,6 +6,9 @@
 *.tar 
 *_with_features.csv
 
+# Notebooks
+*.ipynb
+
 #cache
 *.pyc
 

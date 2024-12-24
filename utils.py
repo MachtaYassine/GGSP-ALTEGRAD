@@ -7,6 +7,7 @@ import scipy.sparse
 import torch
 import torch.nn.functional as F
 import community as community_louvain
+from joblib import Parallel, delayed
 
 from torch import Tensor
 from torch.utils.data import Dataset
@@ -15,21 +16,25 @@ from grakel.utils import graph_from_networkx
 from grakel.kernels import WeisfeilerLehman, VertexHistogram
 from tqdm import tqdm
 import scipy.sparse as sparse
+from sklearn.cluster import KMeans
 from torch_geometric.data import Data
+from torch_geometric.utils import scatter, to_dense_adj, dense_to_sparse, degree
 
 from extract_feats import extract_feats, extract_numbers
 
 import sys
 
-def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,normalize=False):
+def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, labelize=False):
 
     data_lst = []
     if dataset == 'test':
-        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim{spectral_emb_dim}.pt'
+        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim{spectral_emb_dim}_with_labels_{labelize}.pt'
         desc_file = './data/'+dataset+'/test.txt'
 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
+            if labelize:
+                data_lst, kmeans = assign_labels(data_lst)
             print(f'Dataset {filename} loaded from file')
 
         else:
@@ -44,18 +49,22 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,normalize=False):
                 feats_stats = extract_numbers(desc)
                 feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
                 data_lst.append(Data(stats=feats_stats, filename = graph_id)) #prompt=desc for testing
+            if labelize:
+                data_lst, kmeans = assign_labels(data_lst)
             fr.close()                    
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
 
 
     else:
-        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim_{spectral_emb_dim}_norm_{normalize}.pt'
+        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim_{spectral_emb_dim}_norm_{normalize}_with_labels_{labelize}.pt'
         graph_path = './data/'+dataset+'/graph'
         desc_path = './data/'+dataset+'/description'
 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
+            if labelize:
+                data_lst, kmeans = assign_labels(data_lst)
             print(f'Dataset {filename} loaded from file')
 
         else:
@@ -141,8 +150,13 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,normalize=False):
                 feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
 
                 data_lst.append(Data(x=x, edge_index=edge_index, A=adj, stats=feats_stats, filename = filen))
+            if labelize:
+                data_lst, kmeans = assign_labels(data_lst)
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
+
+    if labelize:
+        return data_lst, kmeans
     return data_lst
 
 
@@ -229,6 +243,84 @@ def sigmoid_beta_schedule(timesteps):
     betas = torch.linspace(-6, 6, timesteps)
     return torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
 
+def assign_labels(data, n_clusters=3):
+    """
+    Assigns cluster labels to each graph in the data list.
+    
+    Args:
+    - data: List of Data objects containing graph information.
+    - n_clusters: Number of clusters for K-means. Set to 3 after WCSS visualization.
+    
+    Returns:
+    - data: Updated list with cluster labels assigned.
+    """
+    properties = torch.cat([graph.stats for graph in data], axis=0)
+
+    properties_np = properties.numpy()
+
+    # Perform K-means clustering
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    labels = kmeans.fit_predict(properties_np)
+
+    # Assign labels back to each graph
+    for graph, label in zip(data, labels):
+        graph.label = torch.tensor([label])  # Add the label as a tensor
+
+    return data, kmeans
+
+def create_deepsets_train_dataset(hidden_dim, batch_size, device):
+    n_train = 100000
+
+    X_train, batch = [], []
+    for i in range(n_train):
+        sample = np.random.normal(0, 5, hidden_dim)
+        X_train.append(sample)
+        batch.append(i // batch_size)
+    
+    X_train = torch.tensor(X_train).to(device).to(torch.float)
+    batch = torch.tensor(batch).to(device)
+    y_train = scatter(X_train, batch, dim=0, reduce='sum').to(device)
+    return X_train, y_train, batch
+
+# Function to compute graph features
+def compute_graph_features_from_adj(adj_matrix):
+    graph = nx.from_numpy_array(adj_matrix)
+
+    # Compute features
+    n_nodes = graph.number_of_nodes()
+    n_edges = graph.number_of_edges()
+    avg_degree = sum(dict(graph.degree()).values()) / n_nodes if n_nodes > 0 else 0
+    n_triangles = sum(nx.triangles(graph).values()) // 3
+    clustering_coeff = nx.average_clustering(graph)
+    max_core = max(nx.core_number(graph).values())
+    communities = nx.community.greedy_modularity_communities(graph)
+    n_communities = len(communities)
+
+    return [n_nodes, n_edges, avg_degree, n_triangles, clustering_coeff, max_core, n_communities]
+
+def to_labels(adj, kmeans):
+    """
+    Computes graph features and clustering labels using torch_geometric utilities.
+    """
+    kmeans.cluster_centers_ = kmeans.cluster_centers_.astype(float)  # Handles type errors
+    
+    arr_adj = adj.detach().cpu().numpy()
+    # Use joblib for parallel computation
+    all_properties = Parallel(n_jobs=-1)(
+        delayed(compute_graph_features_from_adj)(adj_matrix) for adj_matrix in arr_adj
+    )
+    
+    # Convert features to numpy float64
+    all_properties = np.array(all_properties, dtype=np.float64)
+    
+    # Cluster label prediction
+    labels = kmeans.predict(all_properties)  # Predict labels for all graphs in the batch
+    
+    # Add the labels to the properties
+    all_properties_with_labels = np.hstack((all_properties, labels.reshape(-1, 1)))
+    
+    # Transform back to a tensor of size (batch_size, nfeatures + 1)
+    return torch.tensor(all_properties_with_labels, dtype=torch.float32).to(adj.device)
 
 
 ## testing script
