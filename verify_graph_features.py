@@ -175,14 +175,14 @@ def z_score_norm(y, y_pred, mean, std, eps=1e-10):
     mse = sum_elements_per_column(mse_st, dc)
     mae = sum_elements_per_column(mae_st, dc)
 
-    mse = np.sum(mse)/15
-    mae = np.sum(mae)/15
+    mse = np.sum(mse)/7
+    mae = np.sum(mae)/7
 
     a = np.absolute(normalized_true - normalized_gen)
     b = np.absolute(normalized_true) + np.absolute(normalized_gen) + eps
     norm_error_st = (a/b)
     norm_error = sum_elements_per_column(norm_error_st, dc)
-    norm_error = np.sum(norm_error)/15
+    norm_error = np.sum(norm_error)/7
 
 
     return mse, mae, norm_error   
