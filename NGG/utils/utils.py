@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 import community as community_louvain
 from joblib import Parallel, delayed
-
+import argparse
 from torch import Tensor
 from torch.utils.data import Dataset
 
@@ -28,7 +28,7 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 
-def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, labelize=False):
+def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, labelize=False,additional_features_bool=False):
 
     data_lst = []
     if dataset == 'test':
@@ -61,7 +61,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
 
 
     else:
-        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim_{spectral_emb_dim}_norm_{normalize}_with_labels_{labelize}.pt'
+        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim_{spectral_emb_dim}_norm_{normalize}_with_labels_{labelize}_additional_{additional_features_bool}.pt'
         graph_path = './data/'+dataset+'/graph'
         desc_path = './data/'+dataset+'/description'
 
@@ -141,7 +141,12 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
                 mn = min(G.number_of_nodes(),spectral_emb_dim)
                 mn+=1
                 x[:,1:mn] = eigvecs[:,:spectral_emb_dim]
-                #normalize adjacency matrix
+                # additional_features_dim: number of additional features
+                # additional_features: degree of node, sum of degrees of neighbourhood, number of nodes in connected component,number of edges in connected component, number of triangles where node is involved, is there a path back to this node ? (0,1), shortest path back to node if 1 else 0, longest_path back to node if 1 else 0 
+                if additional_features_bool:
+                    additional_features = calculate_additional_features(G)
+                    x= torch.cat((x, additional_features), dim=1)
+                    # print(f"additional features added, New shape of x: {x.shape}")
                 if normalize:
                     adj = adj + torch.eye(G.number_of_nodes())
                     # print(adj)
@@ -156,6 +161,8 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
                 data_lst.append(Data(x=x, edge_index=edge_index, A=adj, stats=feats_stats, filename = filen))
             if labelize:
                 data_lst, kmeans = assign_labels(data_lst)
+                
+            data_lst = normalize_last_n_columns(data_lst,11)
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
 
@@ -164,7 +171,110 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
     return data_lst
 
 
-        
+def normalize_last_n_columns(data_lst,n):
+    # Step 1: Extract the last n columns from each x in data_lst
+    last_n_features = [data.x[:, -n:] for data in data_lst]
+
+    # Step 2: Stack these columns vertically to form a matrix
+    stacked_features = torch.vstack(last_n_features)
+
+    # Step 3: Compute the maximum for each column
+    max_values = torch.max(stacked_features, dim=0)[0]
+
+    # Step 4: Normalize each column by dividing by its maximum value
+    normalized_features = stacked_features / max_values
+
+    # Step 5: Replace the last n columns of each x with the normalized values
+    start_idx = 0
+    for data in data_lst:
+        num_nodes = data.x.shape[0]
+        normalized_data = normalized_features[start_idx:start_idx + num_nodes]
+        data.x[:, -n:] = normalized_data
+        start_idx += num_nodes
+
+    return data_lst
+
+def calculate_additional_features(G):
+    """
+    Calculate additional features for each node in the graph.
+
+    Parameters:
+    G (networkx.Graph): The graph for which features are calculated.
+
+    Returns:
+    torch.Tensor: A tensor containing the additional features for each node.
+    """
+    
+    # Initialize the additional_features tensor
+    additional_features_dim = 11  # Updated to include more features
+    additional_features = torch.zeros(G.number_of_nodes(), additional_features_dim)
+
+    # Degree of node
+    degrees = torch.tensor([d for _, d in G.degree()]).float()
+    additional_features[:, 0] = degrees
+
+    # Sum of degrees of the neighborhood
+    neighborhood_degrees = torch.tensor([sum(degrees[list(map(int, G.neighbors(node)))]) for node in G.nodes()]).float()
+    additional_features[:, 1] = neighborhood_degrees
+
+    # Number of nodes in the connected component
+    components = list(nx.connected_components(G))
+    component_sizes = torch.tensor([len(c) for c in components])
+    component_map = {node: size for component, size in zip(components, component_sizes) for node in component}
+    n_node_component = torch.tensor([component_map[node] for node in G.nodes()]).float()
+    additional_features[:, 2] = n_node_component
+
+    # Number of edges in the connected component
+    component_edges = torch.tensor([G.subgraph(c).number_of_edges() for c in components])
+    edge_map = {node: edges for component, edges in zip(components, component_edges) for node in component}
+    n_edges_component = torch.tensor([edge_map[node] for node in G.nodes()]).float()
+    additional_features[:, 3] = n_edges_component
+
+    # Number of triangles where the node is involved
+    triangles = nx.triangles(G)
+    n_triangles = torch.tensor([triangles[node] for node in G.nodes()]).float()
+    additional_features[:, 4] = n_triangles
+
+    # Is there a path back to this node? (Self-loop existence)
+    cycle_existence = torch.tensor([1 if nx.has_path(G, node, node) else 0 for node in G.nodes()])
+    additional_features[:, 5] = cycle_existence
+
+    # Local clustering coefficient
+    local_clustering = nx.clustering(G)
+    clustering_coeffs = torch.tensor([local_clustering[node] for node in G.nodes()]).float()
+    additional_features[:, 6] = clustering_coeffs
+
+    # Betweenness centrality
+    betweenness_centrality = nx.betweenness_centrality(G)
+    betweenness = torch.tensor([betweenness_centrality[node] for node in G.nodes()]).float()
+    additional_features[:, 7] = betweenness
+
+    # Core number
+    core_number = nx.core_number(G)
+    core_nums = torch.tensor([core_number[node] for node in G.nodes()]).float()
+    additional_features[:, 8] = core_nums
+
+    # Closeness centrality
+    closeness_centrality = nx.closeness_centrality(G)
+    closeness = torch.tensor([closeness_centrality[node] for node in G.nodes()]).float()
+    additional_features[:, 9] = closeness
+
+    # PageRank
+    pagerank = nx.pagerank(G)
+    pagerank_values = torch.tensor([pagerank[node] for node in G.nodes()]).float()
+    additional_features[:, 10] = pagerank_values
+
+    # Check the vector of the first node
+    # print(f"Additional features for the first node: {additional_features[0,6]}")
+    if torch.isnan(additional_features).any():
+        print("NaN in additional features")
+        for i in range(len(additional_features)):
+            if torch.isnan(additional_features[i]).any():
+                print(f"NaN found in additional features at index {i}")
+                print(f"The row is {additional_features[i]}")
+        sys.exit()
+
+    return additional_features  
 
 def construct_nx_from_adj(adj):
     G = nx.from_numpy_array(adj, create_using=nx.Graph)
@@ -329,22 +439,34 @@ def to_labels(adj, kmeans):
 
 ## testing script
 if __name__ == "__main__":
-    print(f"Visualizing the Test dataset")
-    dataset = 'test'
-    n_max_nodes = 50
-    spectral_emb_dim = 10
-    data_lst = preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim)
-    print(len(data_lst))
-    print(data_lst[0])
-    print(data_lst[0].stats)# tensor of size 1x7
-    # print(data_lst[0].prompt)
-    print(data_lst[0].filename) #file name or index of the graph
-    print("-------------------")
+    #create parser for normalize, labelize, additional_features_bool
+    parser = argparse.ArgumentParser()
+    
+    parser.add_argument('--normalize', action='store_true', help='normalize the adjacency matrix')
+    parser.add_argument('--labelize', action='store_true', help='labelize the dataset')
+    parser.add_argument('--additional_features', action='store_true', help='add additional features to the dataset')
+    
+    args = parser.parse_args()
+    # print(f"Visualizing the Test dataset")
+    # dataset = 'test'
+    # n_max_nodes = 50
+    # spectral_emb_dim = 10
+    # data_lst = preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,args.normalize, args.labelize, args.additional_features)
+    # print(len(data_lst))
+    # print(data_lst[0])
+    # print(data_lst[0].x.shape) 
+    # print(data_lst[0].stats)# tensor of size 1x7
+    # # print(data_lst[0].prompt)
+    # print(data_lst[0].filename) #file name or index of the graph
+    # print("-------------------")
     print(f"Visualizing the Train dataset")
     dataset = 'train'
     n_max_nodes = 50
     spectral_emb_dim = 10
-    data_lst = preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,normalize=True)
+    if args.labelize:
+        data_lst, kmeans = preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,args.normalize, args.labelize, args.additional_features)
+    else:
+        data_lst = preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim,args.normalize, args.labelize, args.additional_features)
     print(len(data_lst))
     print(data_lst[0])
     print('\n')
@@ -357,4 +479,5 @@ if __name__ == "__main__":
     print(data_lst[0].stats)# tensor of size 1x7
     print('\n')
     print(data_lst[0].filename) #file name or index of the graph
+    
     

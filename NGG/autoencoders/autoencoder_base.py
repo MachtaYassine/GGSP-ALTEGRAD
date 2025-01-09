@@ -16,18 +16,18 @@ from NGG.autoencoders.components.decoders.decoder_norm import Decoder_normalized
 
 # Variational Autoencoder
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, deepsets: DeepSets = None,norm=False):
-        super(VariationalAutoEncoder, self).__init__()
-        self.n_max_nodes = n_max_nodes
-        self.input_dim = input_dim
-        # self.encoder = GIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
-        self.encoder = GIN_concat(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
-        self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
-        self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
-        # self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
-        self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
-        # self.decoder = Decoder_normalized(latent_dim+7, hidden_dim_dec, n_layers_dec, n_max_nodes)
-        self.deepsets = deepsets
+    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, deepsets: DeepSets = None,norm=False,attention=True):
+            super(VariationalAutoEncoder, self).__init__()
+            self.n_max_nodes = n_max_nodes
+            self.input_dim = input_dim
+            # self.encoder = GIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
+            self.encoder = GIN_concat(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc,attention=attention)
+            self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
+            self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
+            # self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
+            self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
+            # self.decoder = Decoder_normalized(latent_dim+7, hidden_dim_dec, n_layers_dec, n_max_nodes)
+            self.deepsets = deepsets
 
     def forward(self, data):
         x_g = self.encoder(data, self.deepsets)
@@ -74,16 +74,10 @@ class VariationalAutoEncoder(nn.Module):
             torch.Tensor: The computed edge-node coherence loss.
         """
         row_sum = torch.sum(adj_matrices, dim=2)  # Shape: (B, N)
-        
-        
-      
         # Extract diagonal entries (self-cycles) for each matrix in the batch
         diag = torch.diagonal(adj_matrices, dim1=1, dim2=2)  # Shape: (B, N)
-        
+        # print(f" verify there is 1 in diag {torch.sum(diag)}")
         row_penalty = torch.relu(row_sum - row_sum.sum()*diag)  # Shape: (B, N)
-        
-        
-        
         return row_penalty.sum()
 
 
@@ -91,7 +85,6 @@ class VariationalAutoEncoder(nn.Module):
             beta=0.05,
             contrastive_hyperparameters: list = None, 
             penalization_hyperparameters: float = None,): 
-        
         
         x_g  = self.encoder(data, self.deepsets) # This encodes the input graph into a latent space but without any information about the prompt and stats...
         mu = self.fc_mu(x_g)

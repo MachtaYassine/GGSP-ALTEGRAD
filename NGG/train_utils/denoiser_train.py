@@ -4,6 +4,7 @@ import torch
 from NGG.denoiser.denoise_model import p_losses
 
 def train_denoise(args, denoise_model, autoencoder,optimizer,scheduler, train_loader, val_loader, device, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod):
+    print(f"Training denoising model, progress will be printed every 5 epochs")
     # Train denoising model
     if args.train_denoiser:
         best_val_loss = np.inf

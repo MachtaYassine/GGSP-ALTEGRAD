@@ -28,13 +28,17 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         n_max_nodes,
         deepsets: DeepSets = None,
         normalize: bool = False,
+        attention: bool = True,
     ):
         super().__init__(input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, deepsets)
-        self.encoder = GIN_concat(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
+        self.encoder = GIN_concat(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc, attention=attention)
         additional_dim = 7
+        self.norm = normalize   
         if normalize:
             self.decoder = Decoder_normalized(latent_dim+additional_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
-        self.decoder = Decoder(latent_dim+additional_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
+            print("Using normalized decoder")
+        else:
+            self.decoder = Decoder(latent_dim+additional_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
 
 
     def forward(self, data):
@@ -48,6 +52,22 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         return adj
 
 
+    def decode(self, mu, logvar):
+        
+       x_g = self.reparameterize(mu, logvar)
+       adj = self.decoder(x_g)
+       
+       if self.norm:
+           #take off self cycles by setting the diagonal to 0
+            adj = adj - torch.diag_embed(torch.diagonal(adj, dim1=1, dim2=2))
+       return adj
+
+    def decode_mu(self, mu):
+        adj = self.decoder(mu)
+        if self.norm:
+            adj = adj - torch.diag_embed(torch.diagonal(adj, dim1=1, dim2=2))
+        return adj
+    
     def loss(
         self, 
         data, 
@@ -55,7 +75,7 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         contrastive_hyperparameters: list = None, 
         penalization_hyperparameters: float = None,
     ): #this loss variant concatenates the stats to the latent space before decoding
-        
+
         x_g  = self.encoder(data, self.deepsets) # This encodes the input graph into a latent space but without any information about the prompt and stats...
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
@@ -77,10 +97,13 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
             loss += contrastive_loss
             results["contrastive_loss"] = contrastive_loss
         if penalization_hyperparameters is not None:
+            # print("penalization_hyperparameters", penalization_hyperparameters)
             penalization = self.get_weighted_penalization(adj, data, penalization_hyperparameters)
             loss += penalization
             results["penalization"] = penalization
+
         results["loss"] = loss
+        
         return results
             
     
@@ -107,6 +130,8 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         recon = F.l1_loss(adj, data.A, reduction='mean')
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         loss = recon + beta*kld + alpha*feature_losses
+        
+        
         # print(loss)
         # print(feature_losses)
         return loss, recon, kld,feature_losses
@@ -169,15 +194,33 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         """
         n_edges= adj.sum(dim=(1,2))/2
         num_nodes = torch.sum(torch.diagonal(adj, dim1=1, dim2=2),dim=1)
-        coherence_loss = self.edge_node_coherence_loss(adj)
+        # coherence_loss = self.edge_node_coherence_loss(adj)
         
-        MSE_n_nodes = torch.square(num_nodes - data.stats[:,0]).mean()
-        MSE_n_edges = torch.square(n_edges - data.stats[:,1]).mean()
+        MSE_n_nodes = self.compute_mse(num_nodes, data.stats[:,0])
+        MSE_n_edges = self.compute_mse(n_edges, data.stats[:,1])    
 
-        feature_losses = (MSE_n_nodes + MSE_n_edges + coherence_loss)
 
+        # feature_losses = (MSE_n_nodes + MSE_n_edges + 0.0001*coherence_loss)
+        feature_losses = (MSE_n_nodes + MSE_n_edges)
+        # print(f"node loss {MSE_n_nodes}, grad_fn {MSE_n_nodes.grad_fn}")
+        # print(f"edge loss {MSE_n_edges}, grad_fn {MSE_n_edges.grad_fn}")
+        # print(f"coherence loss {coherence_loss}, grad_fn {coherence_loss.grad_fn}")
+        
         return lambda_penalization * feature_losses
     
+    def compute_mse(self, pred, gt):
+        """
+        Compute the mean squared error (MSE) between the predicted adjacency matrix and the ground truth.
+        """
+        mean_gt_per_column = torch.mean(gt, dim=0)
+        std_gt_per_column = torch.std(gt, dim=0)
+        
+        norm_gt = (gt - mean_gt_per_column) / std_gt_per_column
+        norm_pred = (pred - mean_gt_per_column) / std_gt_per_column
+        
+        mse = F.mse_loss(norm_pred, norm_gt, reduction='mean')
+    
+        return mse
 
 
 

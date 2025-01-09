@@ -6,6 +6,7 @@ from NGG.denoiser.denoise_model import sample
 from NGG.utils.utils import construct_nx_from_adj
 import os 
 from NGG.utils.verify_graph_features import load_graphs_into_dataframe, compute_features_vectorized, compare_reconstructed_and_prompted_graphs_v2
+import json
 
 def check_results(args, device, autoencoder, denoise_model, test_loader,testset,betas):
     folder_directory = os.path.join("progression_archive",args.name)
@@ -76,4 +77,9 @@ def check_results(args, device, autoencoder, denoise_model, test_loader,testset,
     result_df = compute_features_vectorized(graphs_df)
     result_df.to_csv(csv_file.replace(".csv", "_with_features.csv"), index=False)
     
-    compare_reconstructed_and_prompted_graphs_v2(result_df, testset)
+    compare_reconstructed_and_prompted_graphs_v2(result_df, testset,return_log=csv_file.replace(".csv", "_log.txt"))
+    
+    # save json args
+    with open(os.path.join(folder_directory, "args.json"), "w") as f:
+        json.dump(vars(args), f)
+    

@@ -14,7 +14,7 @@ def load_autoencoder(args, VAE_class,VAE_tag,kmeans,device,deepsets):
             raise ValueError("If using VGAE, you need to labelize your data by specifying --labelize.")                 
         to_labels_func = lambda x: to_labels(x, kmeans)
         autoencoder = VAE_class(
-            args.spectral_emb_dim+1, 
+            args.node_feature_dimension, 
             args.hidden_dim_encoder, 
             args.hidden_dim_decoder, 
             args.latent_dim, 
@@ -27,7 +27,7 @@ def load_autoencoder(args, VAE_class,VAE_tag,kmeans,device,deepsets):
                      
     else:
         autoencoder = VAE_class(
-            args.spectral_emb_dim+1, 
+            args.node_feature_dimension, 
             args.hidden_dim_encoder, 
             args.hidden_dim_decoder, 
             args.latent_dim, 
@@ -36,6 +36,7 @@ def load_autoencoder(args, VAE_class,VAE_tag,kmeans,device,deepsets):
             args.n_max_nodes,
             deepsets,
             args.normalize,
+            args.no_attention,
         ).to(device)
     
     return autoencoder

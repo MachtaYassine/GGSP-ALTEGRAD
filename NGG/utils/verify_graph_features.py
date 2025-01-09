@@ -236,7 +236,7 @@ def evaluation_metrics(y, y_pred, eps=1e-10):
     return mse, mae, norm_error
 
 
-def compare_reconstructed_and_prompted_graphs_v2(result_df: pd.DataFrame, data_lst: List[Data]):
+def compare_reconstructed_and_prompted_graphs_v2(result_df: pd.DataFrame, data_lst: List[Data],return_log=None):
     # prep data for z-score normalization
     y_pred=result_df[['n_nodes', 'n_edges', 'avg_degree', 'n_triangles', 'clustering_coeff', 'max_k_core', 'n_communities']].values
     y=[]
@@ -259,7 +259,16 @@ def compare_reconstructed_and_prompted_graphs_v2(result_df: pd.DataFrame, data_l
         print("MAE for the samples for the feature \""+str(id2feats[i])+"\" is equal to: "+str(maes[i]))
         print("Symmetric Mean absolute Percentage Error for the samples for the feature \""+str(id2feats[i])+"\" is equal to: "+str(norm_errors[i]*100))
         print("=" * 100)
-
+    if return_log is not None:
+        with open(return_log, 'w') as f:
+            f.write(f"MSE for all features: {mse_all}\n")
+            f.write(f"MAE for all features: {mae_all}\n")
+            f.write(f"Normalized error for all features: {norm_error_all*100}\n")
+            for i in range(len(mses)):
+                f.write("MSE for the samples for the feature \""+str(id2feats[i])+"\" is equal to: "+str(mses[i])+"\n")
+                f.write("MAE for the samples for the feature \""+str(id2feats[i])+"\" is equal to: "+str(maes[i])+"\n")
+                f.write("Symmetric Mean absolute Percentage Error for the samples for the feature \""+str(id2feats[i])+"\" is equal to: "+str(norm_errors[i]*100)+"\n")
+                f.write("=" * 100 + "\n")
 
 
 def main():

@@ -54,13 +54,24 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 #check which VAE model to use
 VAE_mapper = {"base": VariationalAutoEncoder, "concat": VariationalAutoEncoder_concat, "features": 'NotImplemented', "GMVAE": GMVAE}
 VAE_class = VAE_mapper[args.AE] 
+if args.AE == 'GMVAE':
+    args.labelize = True    
+elif args.AE == 'concat':
+    args.feature_concat= True
 
 # preprocess train data, validation data and test data. Only once for the first time that you run the code. Then the appropriate .pt files will be saved and loaded.
-trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
-validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
-testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
+print(f" dataset args : normalize : {args.normalize} \n labelize : {args.labelize} \n additional : {args.additional}")
+if args.labelize:
+            trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+            validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+            testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+else:
+    trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+    validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+    testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+    kmeans = None
 
-
+args.node_feature_dimension=trainset[0].x.shape[1]
 
 # initialize data loaders
 train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True)
@@ -68,10 +79,11 @@ val_loader = DataLoader(validset, batch_size=args.batch_size, shuffle=False)
 test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 
 
-deepsets= load_or_not_deepset(args, device)
-
-autoencoder=load_autoencoder(args, VAE_class,args.AE,kmeans,device,deepsets)
-
+deepsets = load_or_not_deepset(args, device)
+print(f"DeepSets state: {'Enabled' if deepsets else 'Disabled'}")
+autoencoder = load_autoencoder(args, VAE_class,args.AE, kmeans, device, deepsets)
+print(f"Autoencoder state: {'Enabled' if autoencoder else 'Disabled'}")
+        
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
 

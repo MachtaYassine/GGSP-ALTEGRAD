@@ -94,7 +94,10 @@ def parse_train_arguments():
 
     # Labelize for contrastive learning
     parser.add_argument('--labelize', action='store_true', default=False, help="Flag to enable/disable labelization of graphs into clusters (default: disabled)")
-
+    
+    parser.add_argument('--additional', action='store_true', default=False, help="Flag to enabladding additional features to the nodes (default: disabled)")
+    
+    parser.add_argument('--no-attention', action='store_false', default=True, help="Flag to enable/disable attention mechanism in the encoder (default: enabled)")
     # Early stopping of VAE training
     parser.add_argument('--early-stopping', action='store_true', default=False, help="Flag to enable/disable early stopping of VAE training (default: disabled)")
 
