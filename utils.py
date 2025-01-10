@@ -21,7 +21,7 @@ from sklearn.cluster import KMeans
 from torch_geometric.data import Data
 from torch_geometric.utils import scatter, to_dense_adj, dense_to_sparse, degree
 
-from extract_feats import extract_feats, extract_numbers, extract_feats_zipped
+from extract_feats import extract_feats, extract_numbers
 
 import sys
 
@@ -123,7 +123,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
     else:
-        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim_{spectral_emb_dim}_norm_{normalize}_with_labels_{labelize}_use_zip_{use_zip}.pt'
+        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim_{spectral_emb_dim}_norm_{normalize}_with_labels_{labelize}.pt'
         graph_path = './data/' + dataset + '/graph'
         desc_path = './data/' + dataset + '/description'
         zip_path = './data/' + dataset + '/dataset.zip'
