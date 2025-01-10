@@ -134,7 +134,7 @@ def main():
     else:
         result_df = pd.read_csv(csv_path.replace(".csv", "_with_features.csv"))
         
-    data_lst = preprocess_dataset("test", 50, 10)
+    data_lst, _ = preprocess_dataset("test", 50, 10)
     
     compare_reconstructed_and_prompted_graphs(result_df, data_lst, csv_path)
 

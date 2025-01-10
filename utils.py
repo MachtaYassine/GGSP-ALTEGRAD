@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 import community as community_louvain
 from joblib import Parallel, delayed
+import random
 
 from torch import Tensor
 from torch.utils.data import Dataset
@@ -20,12 +21,79 @@ from sklearn.cluster import KMeans
 from torch_geometric.data import Data
 from torch_geometric.utils import scatter, to_dense_adj, dense_to_sparse, degree
 
-from extract_feats import extract_feats, extract_numbers
+from extract_feats import extract_feats, extract_numbers, extract_feats_zipped
 
 import sys
 
-def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, labelize=False):
+import zipfile
+import math
 
+from joblib import Parallel, delayed
+
+def process_file(fileread, graph_path, desc_path, zip_path, n_max_nodes, spectral_emb_dim, normalize):
+    # Match graph and description files
+    filen = fileread.split(".")[0]
+    extension = fileread.split(".")[1]
+    fread = os.path.join(graph_path, fileread)
+    fstats = os.path.join(desc_path, filen + ".txt")
+
+    # Load dataset into networkx
+    if extension == "graphml":
+        G = nx.read_graphml(fread)
+        G = nx.convert_node_labels_to_integers(G, ordering="sorted")
+    else:
+        G = nx.read_edgelist(fread)
+
+    CGs = [G.subgraph(c) for c in nx.connected_components(G)]
+    CGs = sorted(CGs, key=lambda x: x.number_of_nodes(), reverse=True)
+    node_list_bfs = []
+    for ii in range(len(CGs)):
+        node_degree_list = [(n, d) for n, d in CGs[ii].degree()]
+        degree_sequence = sorted(node_degree_list, key=lambda tt: tt[1], reverse=True)
+
+        bfs_tree = nx.bfs_tree(CGs[ii], source=degree_sequence[0][0])
+        node_list_bfs += list(bfs_tree.nodes())
+
+    adj_bfs = nx.to_numpy_array(G, nodelist=node_list_bfs)
+    adj = torch.from_numpy(adj_bfs).float()
+    diags = np.sum(adj_bfs, axis=0)
+    diags = np.squeeze(np.asarray(diags))
+    D = sparse.diags(diags).toarray()
+    L = D - adj_bfs
+    with sp.special.errstate(singular="ignore"):
+        diags_sqrt = 1.0 / np.sqrt(diags)
+    diags_sqrt[np.isinf(diags_sqrt)] = 0
+    DH = sparse.diags(diags).toarray()
+    L = np.linalg.multi_dot((DH, L, DH))
+    L = torch.from_numpy(L).float()
+    eigval, eigvecs = torch.linalg.eigh(L)
+    eigval = torch.real(eigval)
+    eigvecs = torch.real(eigvecs)
+    idx = torch.argsort(eigval)
+    eigvecs = eigvecs[:, idx]
+
+    edge_index = torch.nonzero(adj).t()
+
+    size_diff = n_max_nodes - G.number_of_nodes()
+    x = torch.zeros(G.number_of_nodes(), spectral_emb_dim + 1)
+    x[:, 0] = torch.mm(adj, torch.ones(G.number_of_nodes(), 1))[:, 0] / (n_max_nodes - 1)
+    mn = min(G.number_of_nodes(), spectral_emb_dim)
+    mn += 1
+    x[:, 1:mn] = eigvecs[:, :spectral_emb_dim]
+
+    # Normalize adjacency matrix
+    if normalize:
+        adj = adj + torch.eye(G.number_of_nodes())
+    adj = F.pad(adj, [0, size_diff, 0, size_diff])
+    adj = adj.unsqueeze(0)
+
+    feats_stats = extract_feats(fstats)
+    feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
+
+    return Data(x=x, edge_index=edge_index, A=adj, stats=feats_stats, filename=filen)
+
+
+def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, labelize=False, kmeans=None, n_clusters=None):
     data_lst = []
     if dataset == 'test':
         filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim{spectral_emb_dim}_with_labels_{labelize}.pt'
@@ -34,7 +102,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
             if labelize:
-                data_lst, kmeans = assign_labels(data_lst)
+                data_lst, kmeans = assign_labels(data_lst, kmeans, n_clusters)
             print(f'Dataset {filename} loaded from file')
 
         else:
@@ -50,114 +118,41 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
                 feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
                 data_lst.append(Data(stats=feats_stats, filename = graph_id)) #prompt=desc for testing
             if labelize:
-                data_lst, kmeans = assign_labels(data_lst)
+                data_lst, kmeans = assign_labels(data_lst, kmeans, n_clusters)
             fr.close()                    
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
-
-
     else:
-        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim_{spectral_emb_dim}_norm_{normalize}_with_labels_{labelize}.pt'
-        graph_path = './data/'+dataset+'/graph'
-        desc_path = './data/'+dataset+'/description'
+        filename = f'./data/dataset_{dataset}_nodes_{n_max_nodes}_embed_dim_{spectral_emb_dim}_norm_{normalize}_with_labels_{labelize}_use_zip_{use_zip}.pt'
+        graph_path = './data/' + dataset + '/graph'
+        desc_path = './data/' + dataset + '/description'
+        zip_path = './data/' + dataset + '/dataset.zip'
 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
             if labelize:
-                data_lst, kmeans = assign_labels(data_lst)
+                data_lst, kmeans = assign_labels(data_lst, kmeans, n_clusters)
             print(f'Dataset {filename} loaded from file')
-
         else:
-            # traverse through all the graphs of the folder
+            # Handle regular files
             files = [f for f in os.listdir(graph_path)]
-            adjs = []
-            eigvals = []
-            eigvecs = []
-            n_nodes = []
-            max_eigval = 0
-            min_eigval = 0
-            for fileread in tqdm(files):
-                tokens = fileread.split("/")
-                idx = tokens[-1].find(".")
-                filen = tokens[-1][:idx]
-                extension = tokens[-1][idx+1:]
-                fread = os.path.join(graph_path,fileread)
-                fstats = os.path.join(desc_path,filen+".txt")
-                #load dataset to networkx
-                if extension=="graphml":
-                    G = nx.read_graphml(fread)
-                    # Convert node labels back to tuples since GraphML stores them as strings
-                    G = nx.convert_node_labels_to_integers(
-                        G, ordering="sorted"
-                    )
-                else:
-                    G = nx.read_edgelist(fread)
-                # use canonical order (BFS) to create adjacency matrix
-                ### BFS & DFS from largest-degree node
 
-                
-                CGs = [G.subgraph(c) for c in nx.connected_components(G)]
+            # Parallelize file processing
+            data_lst = Parallel(n_jobs=4)(
+                delayed(process_file)(
+                    fileread, graph_path, desc_path, zip_path, n_max_nodes, spectral_emb_dim, normalize
+                )
+                for fileread in tqdm(files)
+            )
 
-                # rank connected componets from large to small size
-                CGs = sorted(CGs, key=lambda x: x.number_of_nodes(), reverse=True)
-
-                node_list_bfs = []
-                for ii in range(len(CGs)):
-                    node_degree_list = [(n, d) for n, d in CGs[ii].degree()]
-                    degree_sequence = sorted(
-                    node_degree_list, key=lambda tt: tt[1], reverse=True)
-
-                    bfs_tree = nx.bfs_tree(CGs[ii], source=degree_sequence[0][0])
-                    node_list_bfs += list(bfs_tree.nodes())
-
-                adj_bfs = nx.to_numpy_array(G, nodelist=node_list_bfs)
-
-                adj = torch.from_numpy(adj_bfs).float()
-                diags = np.sum(adj_bfs, axis=0)
-                diags = np.squeeze(np.asarray(diags))
-                D = sparse.diags(diags).toarray()
-                L = D - adj_bfs
-                with sp.special.errstate(singular="ignore"):
-                    diags_sqrt = 1.0 / np.sqrt(diags)
-                diags_sqrt[np.isinf(diags_sqrt)] = 0
-                DH = sparse.diags(diags).toarray()
-                L = np.linalg.multi_dot((DH, L, DH))
-                L = torch.from_numpy(L).float()
-                eigval, eigvecs = torch.linalg.eigh(L)
-                eigval = torch.real(eigval)
-                eigvecs = torch.real(eigvecs)
-                idx = torch.argsort(eigval)
-                eigvecs = eigvecs[:,idx]
-
-                edge_index = torch.nonzero(adj).t()
-
-                size_diff = n_max_nodes - G.number_of_nodes()
-                x = torch.zeros(G.number_of_nodes(), spectral_emb_dim+1)
-                x[:,0] = torch.mm(adj, torch.ones(G.number_of_nodes(), 1))[:,0]/(n_max_nodes-1)
-                mn = min(G.number_of_nodes(),spectral_emb_dim)
-                mn+=1
-                x[:,1:mn] = eigvecs[:,:spectral_emb_dim]
-                #normalize adjacency matrix
-                if normalize:
-                    adj = adj + torch.eye(G.number_of_nodes())
-                    # print(adj)
-                    # sys.exit()
-                    
-                adj = F.pad(adj, [0, size_diff, 0, size_diff])
-                adj = adj.unsqueeze(0)
-
-                feats_stats = extract_feats(fstats)
-                feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
-
-                data_lst.append(Data(x=x, edge_index=edge_index, A=adj, stats=feats_stats, filename = filen))
             if labelize:
-                data_lst, kmeans = assign_labels(data_lst)
+                data_lst, kmeans = assign_labels(data_lst, kmeans, n_clusters)
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
 
     if labelize:
         return data_lst, kmeans
-    return data_lst
+    return data_lst, None
 
 
         
@@ -243,7 +238,7 @@ def sigmoid_beta_schedule(timesteps):
     betas = torch.linspace(-6, 6, timesteps)
     return torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
 
-def assign_labels(data, n_clusters=3):
+def assign_labels(data, kmeans=None, n_clusters=3):
     """
     Assigns cluster labels to each graph in the data list.
     
@@ -259,7 +254,8 @@ def assign_labels(data, n_clusters=3):
     properties_np = properties.numpy()
 
     # Perform K-means clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    if kmeans is None:
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
     labels = kmeans.fit_predict(properties_np)
 
     # Assign labels back to each graph
@@ -306,7 +302,7 @@ def to_labels(adj, kmeans):
     
     arr_adj = adj.detach().cpu().numpy()
     # Use joblib for parallel computation
-    all_properties = Parallel(n_jobs=-1)(
+    all_properties = Parallel(n_jobs=12)(
         delayed(compute_graph_features_from_adj)(adj_matrix) for adj_matrix in arr_adj
     )
     

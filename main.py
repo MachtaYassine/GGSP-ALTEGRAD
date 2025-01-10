@@ -138,8 +138,12 @@ parser.add_argument('--penalization-hyperparameters', type=float, default=None,
                     help="Hyperparameter weight for the adjacency penalization term (default: None)")
 
 # GMVAE loss hyperparameters
-parser.add_argument('--gmvae-loss-parameters', type=float, nargs=4, default=None, 
-                    help="[con_temperature, alpha_mse, mse_weight, kl_weight] (default: None)")
+parser.add_argument('--gmvae-loss-parameters', type=float, nargs=5, default=None, 
+                    help="[con_temperature, alpha_bce, bce_weight, kl_weight, mse_weight] (default: None)")
+
+# Number of clusters
+parser.add_argument('--n-clusters', type=int, default=3, 
+                    help="In how many clusters we separate the graphs features (default: 3)")
 
 
 args = parser.parse_args()
@@ -147,11 +151,11 @@ args = parser.parse_args()
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 # preprocess train data, validation data and test data. Only once for the first time that you run the code. Then the appropriate .pt files will be saved and loaded.
-trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
-validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
-testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize)
+trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize, n_clusters=args.n_clusters)
+validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize, kmeans=kmeans)
+testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize, kmeans=kmeans)
 
-
+print(len(trainset))
 
 # initialize data loaders
 train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True)
@@ -235,6 +239,7 @@ else:
         args.n_layers_decoder, 
         args.n_max_nodes,
         to_labels_func,
+        num_clusters=args.n_clusters,
     ).to(device)
 
 
