@@ -136,8 +136,8 @@ val_loader = DataLoader(validset, batch_size=args.batch_size, shuffle=False)
 test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 
 
+
 # initialize VGAE model
-autoencoder = VAE_class(args.spectral_emb_dim+1, args.hidden_dim_encoder, args.hidden_dim_decoder, args.latent_dim, args.n_layers_encoder, args.n_layers_decoder, args.n_max_nodes).to(device)
 
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
@@ -149,6 +149,13 @@ if args.train_autoencoder:
     early_stop_counter = 0
     for epoch in range(1, args.epochs_autoencoder+1):
         autoencoder.train()
+        train_loss_all = 0
+        train_count = 0
+        train_loss_all_recon = 0
+        train_loss_all_kld = 0
+        train_loss_feature = 0
+        cnt_train=0
+
         train_loss_all = 0
         train_count = 0
         train_loss_all_recon = 0
