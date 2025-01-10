@@ -60,6 +60,12 @@ class VariationalAutoEncoder(nn.Module):
     def decode_mu(self, mu):
        adj = self.decoder(mu)
        return adj
+   
+   
+    def decode_and_recon_loss(self, x_g,data):
+        adj= self.decoder(x_g)
+        recon = F.l1_loss(adj, data.A, reduction='mean')
+        return recon
 
     def edge_node_coherence_loss(self,adj_matrices,alpha1=1,alpha2=1,alpha3=1):
         """

@@ -95,7 +95,7 @@ def train_autoencoder(args, autoencoder, train_loader, val_loader, device, optim
                 torch.save({
                     'state_dict': autoencoder.state_dict(),
                     'optimizer' : optimizer.state_dict(),
-                }, 'autoencoder.pth.tar')
+                }, f'autoencoder_{args.AE}.pth.tar')
                 
             if early_stop_counter >= 20:
                 break
@@ -103,7 +103,7 @@ def train_autoencoder(args, autoencoder, train_loader, val_loader, device, optim
             if epoch > 20 and best_val_loss < val_loss_trackers["loss"]:
                 early_stop_counter += int(args.early_stopping)
     else:
-        checkpoint = torch.load('autoencoder.pth.tar')
+        checkpoint = torch.load(f'autoencoder_{args.AE}.pth.tar')
         autoencoder.load_state_dict(checkpoint['state_dict'])
         
     autoencoder.eval()

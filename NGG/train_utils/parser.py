@@ -97,6 +97,8 @@ def parse_train_arguments():
     
     parser.add_argument('--additional', action='store_true', default=False, help="Flag to enabladding additional features to the nodes (default: disabled)")
     
+    parser.add_argument('--constrain-denoiser', action='store_true', default=False, help="Flag to enable/disable constraining the denoiser")
+    
     parser.add_argument('--no-attention', action='store_false', default=True, help="Flag to enable/disable attention mechanism in the encoder (default: enabled)")
     # Early stopping of VAE training
     parser.add_argument('--early-stopping', action='store_true', default=False, help="Flag to enable/disable early stopping of VAE training (default: disabled)")

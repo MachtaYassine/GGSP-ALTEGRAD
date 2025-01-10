@@ -10,6 +10,7 @@ def train_denoise(args, denoise_model, autoencoder,optimizer,scheduler, train_lo
         best_val_loss = np.inf
         for epoch in range(1, args.epochs_denoise+1):
             denoise_model.train()
+            autoencoder.eval()
             train_loss_all = 0
             train_count = 0
             for data in train_loader:
@@ -17,20 +18,21 @@ def train_denoise(args, denoise_model, autoencoder,optimizer,scheduler, train_lo
                 optimizer.zero_grad()
                 x_g = autoencoder.encode(data)
                 t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-                loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, loss_type="l2")
+                loss = p_losses(denoise_model, x_g, t, data, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,args.constrain_denoiser,autoencoder, loss_type="l2")
                 loss.backward()
                 train_loss_all += x_g.size(0) * loss.item()
                 train_count += x_g.size(0)
                 optimizer.step()
 
             denoise_model.eval()
+            autoencoder.eval()
             val_loss_all = 0
             val_count = 0
             for data in val_loader:
                 data = data.to(device)
                 x_g = autoencoder.encode(data)
                 t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-                loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, loss_type="l2")
+                loss = p_losses(denoise_model, x_g, t, data, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,args.constrain_denoiser,autoencoder, loss_type="l2")
                 val_loss_all += x_g.size(0) * loss.item()
                 val_count += x_g.size(0)
 
