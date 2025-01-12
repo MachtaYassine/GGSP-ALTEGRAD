@@ -116,9 +116,12 @@ def parse_train_arguments():
                         help="Hyperparameter weight for the adjacency penalization term []")
 
     # GMVAE loss hyperparameters
-    parser.add_argument('--gmvae-loss-parameters', type=float, nargs=4, default=None, 
-                        help="[con_temperature, alpha_mse, mse_weight, kl_weight] []")
+    parser.add_argument('--gmvae-loss-parameters', type=float, nargs=5, default=None, 
+                        help="[con_temperature, alpha_bce, bce_weight, kl_weight, mse_weight] (default: None)")
 
+    # Number of clusters
+    parser.add_argument('--n-clusters', type=int, default=3, 
+                        help="In how many clusters we separate the graphs features (default: 3)")
 
     args = parser.parse_args()
     return args

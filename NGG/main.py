@@ -7,6 +7,7 @@ import pickle
 import shutil
 import csv
 import ast
+import gc
 
 import scipy.sparse as sparse
 from tqdm import tqdm
@@ -62,9 +63,9 @@ elif args.AE == 'concat':
 # preprocess train data, validation data and test data. Only once for the first time that you run the code. Then the appropriate .pt files will be saved and loaded.
 print(f" dataset args : normalize : {args.normalize} \n labelize : {args.labelize} \n additional : {args.additional}")
 if args.labelize:
-            trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
-            validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
-            testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+    trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional, n_clusters=args.n_clusters)
+    validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional, kmeans=kmeans)
+    testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional, kmeans=kmeans)
 else:
     trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
     validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
@@ -90,7 +91,8 @@ scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
 
 autoencoder=train_autoencoder(args, autoencoder, train_loader, val_loader, device, optimizer, scheduler)
 
-
+torch.cuda.empty_cache()
+gc.collect()
 
 # define beta schedule
 betas = linear_beta_schedule(timesteps=args.timesteps)

@@ -27,8 +27,7 @@ def train_autoencoder(args, autoencoder, train_loader, val_loader, device, optim
                 else:
                     loss_dict = autoencoder.loss(
                         data,
-                        # args.beta,
-                        # args.contrastive_hyperparameters,
+                        *args.gmvae_loss_parameters,
                         )
                 
                 # Aggregate loss values dynamically

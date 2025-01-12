@@ -22,6 +22,7 @@ def load_autoencoder(args, VAE_class,VAE_tag,kmeans,device,deepsets):
             args.n_layers_decoder, 
             args.n_max_nodes,
             to_labels_func,
+            num_clusters=args.n_clusters
         ).to(device)        
         
                      

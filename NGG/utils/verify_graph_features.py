@@ -290,7 +290,7 @@ def main():
     if args.v2:
         compare_reconstructed_and_prompted_graphs_v2(result_df, data_lst, csv_path)
     else:
-        compare_reconstructed_and_prompted_graphs(result_df, data_lst)
+        compare_reconstructed_and_prompted_graphs(result_df, data_lst, csv_path)
 
 if __name__ == "__main__":
     main()

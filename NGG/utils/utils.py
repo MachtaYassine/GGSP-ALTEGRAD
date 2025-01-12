@@ -28,7 +28,7 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 
-def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, labelize=False,additional_features_bool=False):
+def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, labelize=False,additional_features_bool=False, kmeans=None, n_clusters=None):
 
     data_lst = []
     if dataset == 'test':
@@ -38,7 +38,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
             if labelize:
-                data_lst, kmeans = assign_labels(data_lst)
+                data_lst, kmeans = assign_labels(data_lst, kmeans, n_clusters)
             print(f'Dataset {filename} loaded from file')
 
         else:
@@ -54,7 +54,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
                 feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
                 data_lst.append(Data(stats=feats_stats, filename = graph_id)) #prompt=desc for testing
             if labelize:
-                data_lst, kmeans = assign_labels(data_lst)
+                data_lst, kmeans = assign_labels(data_lst, kmeans, n_clusters)
             fr.close()                    
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
@@ -68,7 +68,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
             if labelize:
-                data_lst, kmeans = assign_labels(data_lst)
+                data_lst, kmeans = assign_labels(data_lst, kmeans, n_clusters)
             print(f'Dataset {filename} loaded from file')
 
         else:
@@ -160,7 +160,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, normalize=False, 
 
                 data_lst.append(Data(x=x, edge_index=edge_index, A=adj, stats=feats_stats, filename = filen))
             if labelize:
-                data_lst, kmeans = assign_labels(data_lst)
+                data_lst, kmeans = assign_labels(data_lst, kmeans, n_clusters)
                 
             data_lst = normalize_last_n_columns(data_lst,11)
             torch.save(data_lst, filename)
@@ -357,7 +357,7 @@ def sigmoid_beta_schedule(timesteps):
     betas = torch.linspace(-6, 6, timesteps)
     return torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
 
-def assign_labels(data, n_clusters=3):
+def assign_labels(data, kmeans=None, n_clusters=3):
     """
     Assigns cluster labels to each graph in the data list.
     
@@ -373,8 +373,11 @@ def assign_labels(data, n_clusters=3):
     properties_np = properties.numpy()
 
     # Perform K-means clustering
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    labels = kmeans.fit_predict(properties_np)
+    if kmeans is None:
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        labels = kmeans.fit_predict(properties_np)
+    else:
+        labels = kmeans.predict(properties_np)
 
     # Assign labels back to each graph
     for graph, label in zip(data, labels):
@@ -412,11 +415,10 @@ def compute_graph_features_from_adj(adj_matrix):
 
     return [n_nodes, n_edges, avg_degree, n_triangles, clustering_coeff, max_core, n_communities]
 
-def to_labels(adj, kmeans):
+def to_labels(adj, kmeans=None):
     """
     Computes graph features and clustering labels using torch_geometric utilities.
     """
-    kmeans.cluster_centers_ = kmeans.cluster_centers_.astype(float)  # Handles type errors
     
     arr_adj = adj.detach().cpu().numpy()
     # Use joblib for parallel computation
@@ -427,14 +429,16 @@ def to_labels(adj, kmeans):
     # Convert features to numpy float64
     all_properties = np.array(all_properties, dtype=np.float64)
     
-    # Cluster label prediction
-    labels = kmeans.predict(all_properties)  # Predict labels for all graphs in the batch
-    
-    # Add the labels to the properties
-    all_properties_with_labels = np.hstack((all_properties, labels.reshape(-1, 1)))
+    if kmeans is not None:
+        kmeans.cluster_centers_ = kmeans.cluster_centers_.astype(float)  # Handles type errors
+        # Cluster label prediction
+        labels = kmeans.predict(all_properties)  # Predict labels for all graphs in the batch
+        
+        # Add the labels to the properties
+        all_properties = np.hstack((all_properties, labels.reshape(-1, 1)))
     
     # Transform back to a tensor of size (batch_size, nfeatures + 1)
-    return torch.tensor(all_properties_with_labels, dtype=torch.float32).to(adj.device)
+    return torch.tensor(all_properties, dtype=torch.float32).to(adj.device)
 
 
 ## testing script
