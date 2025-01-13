@@ -60,15 +60,15 @@ elif args.AE == 'concat':
     args.feature_concat= True
 
 # preprocess train data, validation data and test data. Only once for the first time that you run the code. Then the appropriate .pt files will be saved and loaded.
-print(f" dataset args : normalize : {args.normalize} \n labelize : {args.labelize} \n additional : {args.additional}")
+print(f" dataset args : normalize : {args.normalize} \n labelize : {args.labelize} \n additional : {args.additional,args.generate}")
 if args.labelize:
-            trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
-            validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
-            testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+            trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
+            validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
+            testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
 else:
-    trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
-    validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
-    testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+    trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
+    validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
+    testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
     kmeans = None
 
 args.node_feature_dimension=trainset[0].x.shape[1]

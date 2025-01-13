@@ -13,7 +13,7 @@ class Decoder_normalized(Decoder): #added by Yass mainly to accept (and output) 
 
         self.mlp = nn.ModuleList(mlp_layers)
 
-    def forward(self, x):
+    def forward(self, x,mask):
         for i in range(self.n_layers-1):
             x = self.relu(self.mlp[i](x))
             
@@ -26,4 +26,6 @@ class Decoder_normalized(Decoder): #added by Yass mainly to accept (and output) 
         
         adj[:,idx[0],idx[1]] = x
         adj = adj + torch.tril(torch.transpose(adj, 1, 2),diagonal=-1)
+        if mask is not None:
+            adj = adj * mask
         return adj

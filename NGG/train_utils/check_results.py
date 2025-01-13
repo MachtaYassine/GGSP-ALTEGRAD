@@ -7,6 +7,7 @@ from NGG.utils.utils import construct_nx_from_adj
 import os 
 from NGG.utils.verify_graph_features import load_graphs_into_dataframe, compute_features_vectorized, compare_reconstructed_and_prompted_graphs_v2
 import json
+import networkx as nx
 
 def check_results(args, device, autoencoder, denoise_model, test_loader,testset,betas):
     folder_directory = os.path.join("progression_archive",args.name)
@@ -65,6 +66,10 @@ def check_results(args, device, autoencoder, denoise_model, test_loader,testset,
                 Gs_generated = construct_nx_from_adj(adj[i,:,:].detach().cpu().numpy())
                 stat_x = stat_x.detach().cpu().numpy()
 
+                n_nodes, n_edges, n_triangles, avg_degree, global_clustering_coeff, max_k_core, n_communities = compute_graph_properties(Gs_generated)
+                # print(f"Number of nodes: {n_nodes}, Number of edges: {n_edges}, Number of triangles: {n_triangles}, Average degree: {avg_degree}, Global clustering coefficient: {global_clustering_coeff}, Max k-core: {max_k_core}, Number of communities: {n_communities}")
+                # print(f"Stats: {stat_x}")
+                # print(f"------------------------------------------")
                 # Define a graph ID
                 graph_id = graph_ids[i]
 
@@ -83,3 +88,13 @@ def check_results(args, device, autoencoder, denoise_model, test_loader,testset,
     with open(os.path.join(folder_directory, "args.json"), "w") as f:
         json.dump(vars(args), f)
     
+
+def compute_graph_properties(graph):
+    n_nodes = graph.number_of_nodes()
+    n_edges = graph.number_of_edges()
+    n_triangles = sum(nx.triangles(graph).values()) // 3
+    avg_degree = sum(dict(graph.degree()).values()) / n_nodes
+    global_clustering_coeff = nx.average_clustering(graph)
+    max_k_core = max(nx.core_number(graph).values())
+    n_communities = nx.algorithms.community.modularity_max.greedy_modularity_communities(graph)
+    return n_nodes, n_edges, n_triangles, avg_degree, global_clustering_coeff, max_k_core, len(n_communities)

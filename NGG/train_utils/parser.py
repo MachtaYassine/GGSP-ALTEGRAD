@@ -97,6 +97,8 @@ def parse_train_arguments():
     
     parser.add_argument('--additional', action='store_true', default=False, help="Flag to enabladding additional features to the nodes (default: disabled)")
     
+    parser.add_argument('--generate', action='store_true', default=False, help="Flag to enable/disable generation of more graphs (default: disabled  )")
+    
     parser.add_argument('--constrain-denoiser', action='store_true', default=False, help="Flag to enable/disable constraining the denoiser")
     
     parser.add_argument('--no-attention', action='store_false', default=True, help="Flag to enable/disable attention mechanism in the encoder (default: enabled)")

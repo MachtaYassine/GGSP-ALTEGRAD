@@ -48,14 +48,16 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         x_g = self.reparameterize(mu, logvar)
         stats = data.stats  # Shape: (batch_size, num_stats)
         x_g = torch.cat((x_g, stats), dim=1) 
-        adj = self.decoder(x_g)
+        mask = self.create_mask_latent(x_g)
+        adj = self.decoder(x_g,mask)
         return adj
 
 
     def decode(self, mu, logvar):
         
        x_g = self.reparameterize(mu, logvar)
-       adj = self.decoder(x_g)
+       mask = self.create_mask_latent(x_g)  
+       adj = self.decoder(x_g,mask)
        
        if self.norm:
            #take off self cycles by setting the diagonal to 0
@@ -63,7 +65,8 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
        return adj
 
     def decode_mu(self, mu):
-        adj = self.decoder(mu)
+        mask = self.create_mask_latent(mu)
+        adj = self.decoder(mu,mask)
         if self.norm:
             adj = adj - torch.diag_embed(torch.diagonal(adj, dim1=1, dim2=2))
         return adj
@@ -83,11 +86,13 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         # Concatenate stats and one-hot-encoded labels
         stats = data.stats  # Shape: (batch_size, num_stats)
         x_g = torch.cat((x_g, stats), dim=1) 
-        adj = self.decoder(x_g) # BS*max_nodes*max_nodes This basically randomly sampes a graph from the distribution with no information whatsoever about the input prompt and stats
+        mask = self.create_mask_latent(x_g)
+        adj = self.decoder(x_g,mask) # BS*max_nodes*max_nodes This basically randomly sampes a graph from the distribution with no information whatsoever about the input prompt and stats
         
         recon = F.l1_loss(adj, data.A, reduction='mean')
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         loss = recon + beta*kld
+        # loss = beta*kld
         results = {
             "recon": recon,
             "kld": kld,
@@ -115,7 +120,8 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar) 
         x_g = torch.cat((x_g, data.stats), dim=1)
-        adj = self.decoder(x_g) # BS*max_nodes*max_nodes This basically randomly sampes a graph from the distribution with information about the input prompt and stats
+        mask = self.create_mask_latent(x_g)
+        adj = self.decoder(x_g,mask) # BS*max_nodes*max_nodes This basically randomly sampes a graph from the distribution with information about the input prompt and stats
         
         
         n_edges= adj.sum(dim=(1,2))/2
@@ -194,18 +200,26 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         """
         n_edges= adj.sum(dim=(1,2))/2
         num_nodes = torch.sum(torch.diagonal(adj, dim1=1, dim2=2),dim=1)
-        # coherence_loss = self.edge_node_coherence_loss(adj)
+        adj_cubed = torch.matmul(adj, torch.matmul(adj, adj))
+        # print(f"adj_cubed {adj_cubed.shape}")
+
+        num_triangles = torch.diagonal(adj_cubed, dim1=1, dim2=2).sum(dim=1) / 6.0
+
+        coherence_loss = self.edge_node_coherence_loss(adj)
         
         MSE_n_nodes = self.compute_mse(num_nodes, data.stats[:,0])
-        MSE_n_edges = self.compute_mse(n_edges, data.stats[:,1])    
+        MSE_n_edges = self.compute_mse(n_edges, data.stats[:,1]) 
+        MSE_n_triangles = self.compute_mse(num_triangles, data.stats[:,2])   
 
 
         # feature_losses = (MSE_n_nodes + MSE_n_edges + 0.0001*coherence_loss)
-        feature_losses = (MSE_n_nodes + MSE_n_edges)
+        feature_losses = (MSE_n_nodes + MSE_n_edges + 0.001*MSE_n_triangles+0.0001*coherence_loss)
         # print(f"node loss {MSE_n_nodes}, grad_fn {MSE_n_nodes.grad_fn}")
         # print(f"edge loss {MSE_n_edges}, grad_fn {MSE_n_edges.grad_fn}")
-        # print(f"coherence loss {coherence_loss}, grad_fn {coherence_loss.grad_fn}")
-        
+        # print(f"triangle loss {0.001*MSE_n_triangles}, grad_fn {MSE_n_triangles.grad_fn}")
+        # print(f"coherence loss {0.0001*coherence_loss}, grad_fn {coherence_loss.grad_fn}")
+        # print(f"feature loss {feature_losses}, grad_fn {feature_losses.grad_fn}")
+        # sys.exit()
         return lambda_penalization * feature_losses
     
     def compute_mse(self, pred, gt):
