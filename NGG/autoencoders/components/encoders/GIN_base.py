@@ -29,9 +29,7 @@ class GIN(torch.nn.Module):
     def forward(self, data, deepsets=None):
         edge_index = data.edge_index
         x = data.x
-        
-        
-        
+
         for conv in self.convs:
             x = conv(x, edge_index)
             x = F.dropout(x, self.dropout, training=self.training)
@@ -51,20 +49,19 @@ class GIN(torch.nn.Module):
             self.convs = torch.nn.ModuleList()
             self.convs.append(GATv2Conv(in_channels=self.input_dim, 
                                         out_channels=self.hidden_dim, 
-                                        heads=4,
-                                        edge_dim=self.input_dim*2)) 
+                                        heads=4))  # Omit default parameters
+
 
             for layer in range(self.n_layers - 2):  # Apply concat for intermediate layers
                 self.convs.append(GATv2Conv(in_channels=self.hidden_dim * 4,  # The output of each GATv2Conv layer is multiplied by the number of attention heads
                                             out_channels=self.hidden_dim, 
-                                            heads=4,
-                                            edge_dim=self.input_dim*2)) 
+                                            heads=4))  # Omit default parameters
 
             # Last layer without concatenation
             self.convs.append(GATv2Conv(in_channels=self.hidden_dim * 4,  # Input is multiplied by the number of attention heads
                                         out_channels=self.hidden_dim,  # No concatenation in the last layer
-                                        heads=1,
-                                        edge_dim=self.input_dim*2))  # Omit default parameters
+                                        heads=1))
+
         else:
             # If attention is False, we use the GINConv layer
             self.convs = torch.nn.ModuleList()

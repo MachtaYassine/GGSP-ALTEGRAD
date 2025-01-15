@@ -48,16 +48,20 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         x_g = self.reparameterize(mu, logvar)
         stats = data.stats  # Shape: (batch_size, num_stats)
         x_g = torch.cat((x_g, stats), dim=1) 
+
         mask = self.create_mask_latent(x_g)
         adj = self.decoder(x_g,mask)
+
         return adj
 
 
     def decode(self, mu, logvar):
         
        x_g = self.reparameterize(mu, logvar)
+
        mask = self.create_mask_latent(x_g)  
        adj = self.decoder(x_g,mask)
+
        
        if self.norm:
            #take off self cycles by setting the diagonal to 0
@@ -65,8 +69,10 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
        return adj
 
     def decode_mu(self, mu):
+
         mask = self.create_mask_latent(mu)
         adj = self.decoder(mu,mask)
+
         if self.norm:
             adj = adj - torch.diag_embed(torch.diagonal(adj, dim1=1, dim2=2))
         return adj
@@ -86,13 +92,14 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         # Concatenate stats and one-hot-encoded labels
         stats = data.stats  # Shape: (batch_size, num_stats)
         x_g = torch.cat((x_g, stats), dim=1) 
+
         mask = self.create_mask_latent(x_g)
         adj = self.decoder(x_g,mask) # BS*max_nodes*max_nodes This basically randomly sampes a graph from the distribution with no information whatsoever about the input prompt and stats
+
         
         recon = F.l1_loss(adj, data.A, reduction='mean')
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         loss = recon + beta*kld
-        # loss = beta*kld
         results = {
             "recon": recon,
             "kld": kld,
@@ -122,6 +129,7 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         x_g = torch.cat((x_g, data.stats), dim=1)
         mask = self.create_mask_latent(x_g)
         adj = self.decoder(x_g,mask) # BS*max_nodes*max_nodes This basically randomly sampes a graph from the distribution with information about the input prompt and stats
+
         
         
         n_edges= adj.sum(dim=(1,2))/2
@@ -200,6 +208,7 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         """
         n_edges= adj.sum(dim=(1,2))/2
         num_nodes = torch.sum(torch.diagonal(adj, dim1=1, dim2=2),dim=1)
+
         adj_cubed = torch.matmul(adj, torch.matmul(adj, adj))
         # print(f"adj_cubed {adj_cubed.shape}")
 
@@ -220,6 +229,7 @@ class VariationalAutoEncoder_concat(VariationalAutoEncoder):
         # print(f"coherence loss {0.0001*coherence_loss}, grad_fn {coherence_loss.grad_fn}")
         # print(f"feature loss {feature_losses}, grad_fn {feature_losses.grad_fn}")
         # sys.exit()
+
         return lambda_penalization * feature_losses
     
     def compute_mse(self, pred, gt):

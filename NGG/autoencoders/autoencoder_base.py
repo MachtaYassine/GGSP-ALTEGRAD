@@ -122,6 +122,7 @@ class VariationalAutoEncoder(nn.Module):
 
     
 
+
     def create_mask_data(self, data):
         mask = torch.zeros(data.A.shape)
         for i in range(data.A.shape[0]): # iterate through the batch of graphs
@@ -141,3 +142,4 @@ class VariationalAutoEncoder(nn.Module):
             mask[i,:n_nodes,:n_nodes]=1
         
         return mask
+

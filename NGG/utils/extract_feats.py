@@ -1,3 +1,4 @@
+
 import random
 import re
 
@@ -5,6 +6,7 @@ random.seed(32)
 
 
 def extract_numbers(text):
+
     """
     Extract numbers (integers and floats) from a given text using regex.
 

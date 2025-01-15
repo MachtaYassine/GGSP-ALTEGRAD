@@ -7,6 +7,8 @@ import pickle
 import shutil
 import csv
 import ast
+import gc
+
 
 import scipy.sparse as sparse
 from tqdm import tqdm
@@ -35,6 +37,8 @@ from NGG.utils.utils import (
 
 from NGG.train_utils.parser import parse_train_arguments
 from NGG.train_utils.load_or_not_deepset import load_or_not_deepset
+from NGG.train_utils.load_or_not_stat_model import load_or_not_stat_model
+
 from NGG.train_utils.load_autoencoder import load_autoencoder
 from NGG.train_utils.train_autoencoder import train_autoencoder
 from NGG.train_utils.denoiser_train import train_denoise
@@ -60,15 +64,17 @@ elif args.AE == 'concat':
     args.feature_concat= True
 
 # preprocess train data, validation data and test data. Only once for the first time that you run the code. Then the appropriate .pt files will be saved and loaded.
-print(f" dataset args : normalize : {args.normalize} \n labelize : {args.labelize} \n additional : {args.additional,args.generate}")
+
+print(f" dataset args : normalize : {args.normalize} \n labelize : {args.labelize} \n additional : {args.additional}")
 if args.labelize:
-            trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
-            validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
-            testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
+    trainset, kmeans = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional, n_clusters=args.n_clusters)
+    validset, _ = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional, kmeans=kmeans)
+    testset, _ = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional, kmeans=kmeans)
 else:
-    trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
-    validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
-    testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional,args.generate)
+    trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+    validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+    testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.normalize, args.labelize,args.additional)
+
     kmeans = None
 
 args.node_feature_dimension=trainset[0].x.shape[1]
@@ -81,7 +87,11 @@ test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 
 deepsets = load_or_not_deepset(args, device)
 print(f"DeepSets state: {'Enabled' if deepsets else 'Disabled'}")
-autoencoder = load_autoencoder(args, VAE_class,args.AE, kmeans, device, deepsets)
+stat_model = load_or_not_stat_model(args, train_loader, device)
+print(f"Stat model state: {'Enabled' if stat_model else 'Disabled'}")
+to_labels = stat_model if stat_model is not None else kmeans
+autoencoder = load_autoencoder(args, VAE_class,args.AE, to_labels, device, deepsets)
+
 print(f"Autoencoder state: {'Enabled' if autoencoder else 'Disabled'}")
         
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
@@ -90,6 +100,8 @@ scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
 
 autoencoder=train_autoencoder(args, autoencoder, train_loader, val_loader, device, optimizer, scheduler)
 
+torch.cuda.empty_cache()
+gc.collect()
 
 
 # define beta schedule

@@ -2,7 +2,9 @@ import pandas as pd
 import networkx as nx
 import ast
 from typing import List
+
 from NGG.utils.utils import preprocess_dataset, compute_graph_features_from_adj, Data
+
 import os
 import torch
 import matplotlib.pyplot as plt
@@ -285,12 +287,15 @@ def main():
     else:
         result_df = pd.read_csv(csv_path.replace(".csv", "_with_features.csv"))
         
-    data_lst, _ = preprocess_dataset("test", 50, 10)
+
+    data_lst = preprocess_dataset("test", 50, 10)
+
     
     if args.v2:
         compare_reconstructed_and_prompted_graphs_v2(result_df, data_lst, csv_path)
     else:
-        compare_reconstructed_and_prompted_graphs(result_df, data_lst)
+        compare_reconstructed_and_prompted_graphs(result_df, data_lst, csv_path)
+
 
 if __name__ == "__main__":
     main()
