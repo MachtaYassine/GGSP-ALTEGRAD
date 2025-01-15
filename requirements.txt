@@ -1,0 +1,9 @@
+torch
+networkx
+numpy<2
+torch_geometric
+scipy
+community
+joblib
+grakel
+matplotlib
