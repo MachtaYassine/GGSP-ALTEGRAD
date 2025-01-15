@@ -122,3 +122,24 @@ class VariationalAutoEncoder(nn.Module):
 
     
 
+
+    def create_mask_data(self, data):
+        mask = torch.zeros(data.A.shape)
+        for i in range(data.A.shape[0]): # iterate through the batch of graphs
+            n_nodes=data.stats[i,0].item()
+            mask[i,:n_nodes,:n_nodes]=1
+        return mask
+    
+    def create_mask_latent(self, x_g,edge_index=False):
+        batch_size = x_g.shape[0] if len(x_g.shape) > 1 else 1
+        
+        mask=torch.zeros((batch_size,self.n_max_nodes,self.n_max_nodes)).to(x_g.device)
+        for i in range(batch_size):
+            n_nodes=int(x_g[i,32])
+            # print(f"the entire x_g row is {x_g[i]}")
+            # print(f"n_nodes: {n_nodes}")
+            # sys.exit()
+            mask[i,:n_nodes,:n_nodes]=1
+        
+        return mask
+

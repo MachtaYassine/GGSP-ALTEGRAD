@@ -13,11 +13,13 @@ class GIN_concat(GIN):
         
 
     def forward(self, data, deepsets=None):
+        #edge_attr = data.edge_features
         edge_index = data.edge_index
         x = data.x
 
         for conv in self.convs:
             x = conv(x, edge_index)
+
             x = F.dropout(x, self.dropout, training=self.training)
 
         # aggreagates all the nodes features in the batch

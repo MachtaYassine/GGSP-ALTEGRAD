@@ -1,7 +1,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from utils import preprocess_dataset, Data
+
+from NGG.utils.utils import preprocess_dataset, Data
+
 from typing import List
 
 def get_features_distribution_per_dataset(data: List[Data]):

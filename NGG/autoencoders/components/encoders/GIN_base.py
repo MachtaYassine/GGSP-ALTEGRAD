@@ -51,6 +51,7 @@ class GIN(torch.nn.Module):
                                         out_channels=self.hidden_dim, 
                                         heads=4))  # Omit default parameters
 
+
             for layer in range(self.n_layers - 2):  # Apply concat for intermediate layers
                 self.convs.append(GATv2Conv(in_channels=self.hidden_dim * 4,  # The output of each GATv2Conv layer is multiplied by the number of attention heads
                                             out_channels=self.hidden_dim, 
@@ -60,6 +61,7 @@ class GIN(torch.nn.Module):
             self.convs.append(GATv2Conv(in_channels=self.hidden_dim * 4,  # Input is multiplied by the number of attention heads
                                         out_channels=self.hidden_dim,  # No concatenation in the last layer
                                         heads=1))
+
         else:
             # If attention is False, we use the GINConv layer
             self.convs = torch.nn.ModuleList()

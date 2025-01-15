@@ -42,6 +42,9 @@ def p_losses(denoise_model, x_start, t, data, sqrt_alphas_cumprod, sqrt_one_minu
     else:
         raise NotImplementedError()
     
+
+    loss_dict = {"loss_denosie": loss}
+
     if constrain_decoder:
         if autoencoder._get_name() == "GMVAE":
             cluster_labels = torch.tensor([data[i].label for i in range(len(data))], device="cuda")  # Shape: (batch_size,)
@@ -63,7 +66,11 @@ def p_losses(denoise_model, x_start, t, data, sqrt_alphas_cumprod, sqrt_one_minu
         recon= autoencoder.decode_and_recon_loss(concat_stats,data)
         loss+=recon
 
-    return loss
+        loss_dict["loss_recon"]=recon
+
+    loss_dict["loss_total"]=loss
+    return loss_dict
+
 
 
 # Position embeddings

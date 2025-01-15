@@ -28,6 +28,7 @@ def train_autoencoder(args, autoencoder, train_loader, val_loader, device, optim
                     loss_dict = autoencoder.loss(
                         data,
                         *args.gmvae_loss_parameters,
+
                         )
                 
                 # Aggregate loss values dynamically
@@ -101,6 +102,12 @@ def train_autoencoder(args, autoencoder, train_loader, val_loader, device, optim
             
             if epoch > 20 and best_val_loss < val_loss_trackers["loss"]:
                 early_stop_counter += int(args.early_stopping)
+
+        torch.save({
+                    'state_dict': autoencoder.state_dict(),
+                    'optimizer' : optimizer.state_dict(),
+                }, f'autoencoder_{args.AE}_final.pth.tar')
+
     else:
         checkpoint = torch.load(f'autoencoder_{args.AE}.pth.tar')
         autoencoder.load_state_dict(checkpoint['state_dict'])

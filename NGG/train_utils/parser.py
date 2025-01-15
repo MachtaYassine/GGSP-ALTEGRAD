@@ -36,8 +36,10 @@ def parse_train_arguments():
     # Wether to use DeepSets as feature aggregation
     parser.add_argument('--deepsets', action='store_true', default=False, help="Flag to enable/disable DeepSets training (default: disabled)")
 
+
     # Whether to use a linear model to predict features
     parser.add_argument('--stats-model', action='store_true', default=False, help="Flag to enable/disable Stat model training (default: disabled)")
+
 
     # Number of epochs for Deepsets training
     parser.add_argument('--epochs-deepsets', type=int, default=200, help="Number of training epochs for DeepSets (default: 30)")
@@ -100,6 +102,10 @@ def parse_train_arguments():
     
     parser.add_argument('--additional', action='store_true', default=False, help="Flag to enabladding additional features to the nodes (default: disabled)")
     
+
+    # parser.add_argument('--generate', action='store_true', default=False, help="Flag to enable/disable generation of more graphs (default: disabled  )")
+    
+
     parser.add_argument('--constrain-denoiser', action='store_true', default=False, help="Flag to enable/disable constraining the denoiser")
     
     parser.add_argument('--no-attention', action='store_false', default=True, help="Flag to enable/disable attention mechanism in the encoder (default: enabled)")
@@ -119,12 +125,14 @@ def parse_train_arguments():
                         help="Hyperparameter weight for the adjacency penalization term []")
 
     # GMVAE loss hyperparameters
+
     parser.add_argument('--gmvae-loss-parameters', type=float, nargs=5, default=None, 
                         help="[con_temperature, alpha_bce, bce_weight, kl_weight, mse_weight] (default: None)")
 
     # Number of clusters
     parser.add_argument('--n-clusters', type=int, default=3, 
                         help="In how many clusters we separate the graphs features (default: 3)")
+
 
     args = parser.parse_args()
     return args

@@ -15,7 +15,9 @@ class Decoder(nn.Module):
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x):
+
+    def forward(self, x,mask=None):
+
         for i in range(self.n_layers-1):
             x = self.relu(self.mlp[i](x))
         
@@ -27,4 +29,8 @@ class Decoder(nn.Module):
         idx = torch.triu_indices(self.n_nodes, self.n_nodes, 1)
         adj[:,idx[0],idx[1]] = x
         adj = adj + torch.transpose(adj, 1, 2)
+
+        if mask is not None:
+            adj = adj*mask
+
         return adj
