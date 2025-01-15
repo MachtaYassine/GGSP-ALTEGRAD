@@ -5,7 +5,7 @@
 *.pth
 *.tar 
 *_with_features.csv
-
+*.egg-info
 # Notebooks
 *.ipynb
 
