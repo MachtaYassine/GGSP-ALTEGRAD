@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from utils import preprocess_dataset, Data
+from NGG.utils.utils import preprocess_dataset, Data
 from typing import List
 
 def get_features_distribution_per_dataset(data: List[Data]):
@@ -34,7 +34,7 @@ def main():
     list_of_nodes_val, list_of_edges_val, list_of_avg_degree_val, list_of_triangles_val, list_of_clustering_coeff_val, list_of_max_core_val, list_of_communities_val = get_features_distribution_per_dataset(val_data)
     
     #plot overlayed histograms blue is train,green is val,red is test
-    fig, axs = plt.subplots(2, 4, figsize=(15, 15))
+    fig, axs = plt.subplots(2, 4, figsize=(15, 60))
     fig.suptitle(
         'Feature Distributions per Dataset\n'
         'We should not be having any "out of distribution problems"', 
@@ -70,7 +70,7 @@ def main():
         ax.legend()
 
     # Adjust layout to fit titles and save the figure
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.tight_layout()
     plt.savefig("feature_distributions_per_dataset.png")
     plt.show()
     

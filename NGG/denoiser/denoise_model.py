@@ -2,6 +2,8 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import sys 
+
 
 def extract(a, t, x_shape):
     batch_size = t.shape[0]
@@ -23,13 +25,14 @@ def q_sample(x_start, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noi
 
 
 # Loss function for denoising
-def p_losses(denoise_model, x_start, t, cond, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noise=None, loss_type="l1"):
+def p_losses(denoise_model, x_start, t, data, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, constrain_decoder ,autoencoder,noise=None ,loss_type="l1"):
+    cond=data.stats
     if noise is None:
         noise = torch.randn_like(x_start)
 
     x_noisy = q_sample(x_start, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noise=noise)
     predicted_noise = denoise_model(x_noisy, t, cond)
-
+    
     if loss_type == 'l1':
         loss = F.l1_loss(noise, predicted_noise)
     elif loss_type == 'l2':
@@ -38,8 +41,32 @@ def p_losses(denoise_model, x_start, t, cond, sqrt_alphas_cumprod, sqrt_one_minu
         loss = F.smooth_l1_loss(noise, predicted_noise)
     else:
         raise NotImplementedError()
+    
+    loss_dict = {"loss_denosie": loss}
+    if constrain_decoder:
+        if autoencoder._get_name() == "GMVAE":
+            cluster_labels = torch.tensor([data[i].label for i in range(len(data))], device="cuda")  # Shape: (batch_size,)
+            cond = torch.cat((cond, cluster_labels.unsqueeze(1)), 1)
+        def extract_temp(a, t, x_shape,device=x_start.device):
+            batch_size = t.shape[0]
+            out = a.gather(-1, t)
+            return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
+        
+        #set devices to GPU
+        sqrt_alphas_cumprod= sqrt_alphas_cumprod.to(x_start.device)
+        sqrt_one_minus_alphas_cumprod= sqrt_one_minus_alphas_cumprod.to(x_start.device)
 
-    return loss
+        sqrt_alphas_cumprod_t = extract_temp(sqrt_alphas_cumprod, t, x_start.shape)
+        sqrt_one_minus_alphas_cumprod_t = extract_temp(sqrt_one_minus_alphas_cumprod, t, x_start.shape)
+        
+        reconstructed_x_start = (x_noisy - sqrt_one_minus_alphas_cumprod_t * predicted_noise) / sqrt_alphas_cumprod_t
+        concat_stats=torch.cat((reconstructed_x_start,cond),1)
+        recon= autoencoder.decode_and_recon_loss(concat_stats,data)
+        loss+=recon
+        loss_dict["loss_recon"]=recon
+
+    loss_dict["loss_total"]=loss
+    return loss_dict
 
 
 # Position embeddings
