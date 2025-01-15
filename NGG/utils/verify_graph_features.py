@@ -2,7 +2,7 @@ import pandas as pd
 import networkx as nx
 import ast
 from typing import List
-from utils import preprocess_dataset, compute_graph_features_from_adj, Data
+from NGG.utils.utils import preprocess_dataset, compute_graph_features_from_adj, Data
 import os
 import torch
 import matplotlib.pyplot as plt
