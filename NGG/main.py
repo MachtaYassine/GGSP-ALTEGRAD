@@ -36,6 +36,7 @@ from NGG.utils.utils import (
 
 from NGG.train_utils.parser import parse_train_arguments
 from NGG.train_utils.load_or_not_deepset import load_or_not_deepset
+from NGG.train_utils.load_or_not_stat_model import load_or_not_stat_model
 from NGG.train_utils.load_autoencoder import load_autoencoder
 from NGG.train_utils.train_autoencoder import train_autoencoder
 from NGG.train_utils.denoiser_train import train_denoise
@@ -82,7 +83,10 @@ test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 
 deepsets = load_or_not_deepset(args, device)
 print(f"DeepSets state: {'Enabled' if deepsets else 'Disabled'}")
-autoencoder = load_autoencoder(args, VAE_class,args.AE, kmeans, device, deepsets)
+stat_model = load_or_not_stat_model(args, train_loader, device)
+print(f"Stat model state: {'Enabled' if stat_model else 'Disabled'}")
+to_labels = stat_model if stat_model is not None else kmeans
+autoencoder = load_autoencoder(args, VAE_class,args.AE, to_labels, device, deepsets)
 print(f"Autoencoder state: {'Enabled' if autoencoder else 'Disabled'}")
         
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)

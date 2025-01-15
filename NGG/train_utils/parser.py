@@ -36,6 +36,9 @@ def parse_train_arguments():
     # Wether to use DeepSets as feature aggregation
     parser.add_argument('--deepsets', action='store_true', default=False, help="Flag to enable/disable DeepSets training (default: disabled)")
 
+    # Whether to use a linear model to predict features
+    parser.add_argument('--stats-model', action='store_true', default=False, help="Flag to enable/disable Stat model training (default: disabled)")
+
     # Number of epochs for Deepsets training
     parser.add_argument('--epochs-deepsets', type=int, default=200, help="Number of training epochs for DeepSets (default: 30)")
 

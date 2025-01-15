@@ -97,7 +97,7 @@ class GMVAE(VariationalAutoEncoder_concat):
         adj = self.decoder(torch.cat((z, stats), 1))
 
         stats = self.to_labels(adj)
-        one_hot_labels = F.one_hot(stats[:, -1].to(torch.int64), num_classes=self.num_clusters).float()
+        one_hot_labels = F.one_hot(torch.clamp(stats[:, -1].to(torch.int64), max=self.num_clusters - 1, min=0), num_classes=self.num_clusters).float()
         _ , _ , feat_emb = self.label_forward(one_hot_labels)
 
         return adj, feat_emb, mu, log_var, stats
