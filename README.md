@@ -1,13 +1,17 @@
 # GGSP-ALTEGRAD
-## Readme structure
+
+## Demo
+
+[Quick demo hosted at HF](https://huggingface.co/spaces/ymachta/GGSP-Project)
 
 ## Context
 Challenge: Generating Graphs from specified properties for the ALTEGRAD course
 
 ## Folder structure
 
-.Repo
+
 ```
+.Repo
 ├── NGG                    # Main module folder for the NGG project
 │   ├── main.py            # Entry point or table of contents for the project
 │   ├── train_utils        # Utilities and scripts for training models
