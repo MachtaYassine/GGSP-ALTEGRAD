@@ -4,8 +4,11 @@
 
 [Quick demo hosted at HF](https://huggingface.co/spaces/ymachta/GGSP-Project)
 
+![Demo link above](assets/demo_ag.png "Optional title")
+
 ## Context
-Challenge: Generating Graphs from specified properties for the ALTEGRAD course
+Challenge: [Generating Graphs from specified properties for the ALTEGRAD course](https://www.kaggle.com/competitions/generating-graphs-with-specified-properties/overview)
+
 
 ## Folder structure
 
@@ -57,12 +60,14 @@ Challenge: Generating Graphs from specified properties for the ALTEGRAD course
 - 1000 Validation set
 - 1000 Test set
 
-Place the train, val and test data from [The kaggle dataset](https://www.kaggle.com/competitions/generating-graphs-with-specified-properties/data)
+Place the train, val and test data from [The kaggle dataset](https://www.kaggle.com/competitions/generating-graphs-with-specified-properties/data) in the .data/ folder you'll add.
 
 
 ## Model architechture and training
 
 🚧 Work in Progress
+
+Check the [report in the repository](Project_report.pdf)
 
 ## Installation, Usage and Commands
 
